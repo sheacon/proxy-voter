@@ -1,0 +1,8 @@
+name = "proxy-voter-email"
+main = "email-worker.js"
+compatibility_date = "2024-09-23"
+
+[vars]
+# Set these via `wrangler secret put` or in the Cloudflare dashboard
+# WEBHOOK_URL = ""
+# WEBHOOK_SECRET = ""
