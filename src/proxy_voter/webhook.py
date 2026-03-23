@@ -114,6 +114,15 @@ async def _handle_new_forward(parsed) -> None:
 
         if parsed.auto_vote:
             logger.info("Auto-vote enabled, casting votes immediately")
+            # Reload the ballot page — the ProxyVote session likely expired
+            # during the research phase (can take several minutes)
+            await session.page.goto(
+                parsed.proxyvote_url, wait_until="domcontentloaded", timeout=60000
+            )
+            try:
+                await session.page.wait_for_selector("text=Submit Vote", timeout=30000)
+            except Exception:
+                logger.warning("Submit Vote button not found after page reload")
             await cast_votes(session.page, decisions)
 
             session_id = await create_session(
