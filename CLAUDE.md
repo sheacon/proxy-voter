@@ -32,6 +32,14 @@ uv run playwright install --with-deps chromium
 
 Proxy Voter is an automated proxy voting system for corporate shareholder ballots. Users forward proxy vote notification emails from any brokerage (Charles Schwab, Fidelity, Vanguard, E*TRADE, etc.) to a configured inbound email address, and the system researches proposals, recommends votes, and optionally casts them. The system uses Claude to dynamically interpret emails and voting platform pages, so it is not tied to any specific brokerage or voting platform.
 
+### Modules
+
+- **Config** (`config.py`) — `Settings` model via pydantic-settings. Loads env vars from `.env` with a cached singleton (`get_settings()`). Includes helpers to parse `APPROVED_SENDERS` and load `POLICY_PREFERENCES_PATH`.
+
+- **Models** (`models.py`) — shared Pydantic models and enums: `EmailType`, `ParsedEmail`, `BallotData`, `VotingDecision`, `SessionStatus`.
+
+- **Main** (`main.py`) — FastAPI app entry point with lifespan context manager for DB initialization.
+
 ### Email flow
 
 1. **Cloudflare Email Worker** (`cloudflare-worker/email-worker.js`) — receives inbound email and forwards raw RFC 822 bytes to the Fly.io webhook.
@@ -40,15 +48,15 @@ Proxy Voter is an automated proxy voting system for corporate shareholder ballot
 
 3. **Email Parser** (`email_parser.py`) — classifies incoming emails as either a **new forward** (contains a voting platform URL) or an **approval reply** (subject contains `[PV-xxxx]`). Uses Claude to extract the voting URL, company name, and platform name from any brokerage email format. Also detects the optional `auto-vote` flag from the forwarded body.
 
-4. **Scraper** (`scraper.py`) — opens the voting URL in headless Chromium (Playwright), waits for the ballot to render, extracts page text and document URLs. Returns a `BallotSession` that keeps the browser open for later voting.
+4. **Scraper** (`scraper.py`) — opens the voting URL in headless Chromium (Playwright), waits for the ballot to render, extracts page text and document URLs. Returns a `BallotSession` (defined here) that keeps the browser open for later voting.
 
 5. **Researcher** (`researcher.py`) — sends ballot text to Claude with web search enabled. Claude identifies proposals, researches the company, and returns structured `VotingDecision` objects via tool use (`submit_voting_decisions`).
 
-6. **Voter** (`voter.py`) — extracts form element data (radio buttons, dropdowns, checkboxes) from the live ballot page and sends it to Claude, which maps voting decisions to form actions via tool use (`submit_vote_actions`). Executes the actions and submits the form.
+6. **Voter** (`voter.py`) — extracts form element data (radio buttons, dropdowns, checkboxes) from the live ballot page and sends it to Claude, which maps voting decisions to form actions via tool use (`submit_vote_actions`). Executes the actions and submits the form. Includes session timeout modal dismissal.
 
 7. **Notifier** (`notifier.py`) — sends HTML emails via Resend: recommendation emails (pending approval), confirmation emails (votes submitted), or error emails.
 
-8. **Storage** (`storage.py`) — SQLite via aiosqlite. Stores voting sessions with status tracking (`pending_approval` → `votes_submitted` | `expired`).
+8. **Storage** (`storage.py`) — SQLite via aiosqlite. Stores voting sessions with status tracking (`pending_approval` → `votes_submitted` | `expired`). Includes migration logic for schema changes.
 
 ### Two-phase voting
 
@@ -56,10 +64,12 @@ By default, new forwards trigger a **recommendation email** — the user must re
 
 ### Key models
 
+- `EmailType` — enum: `NEW_FORWARD`, `APPROVAL_REPLY`
 - `ParsedEmail` — classified email with type, sender, voting URL, platform name, session ID
 - `BallotData` — scraped page text, document URLs, voting URL
-- `VotingDecision` — per-proposal vote with reasoning and policy rationale
-- `BallotSession` — holds live Playwright page + browser for the ballot
+- `VotingDecision` — per-proposal vote with reasoning and policy rationale (includes company name, meeting date, voting deadline)
+- `SessionStatus` — enum: `PENDING_APPROVAL`, `VOTES_SUBMITTED`, `EXPIRED`
+- `BallotSession` — dataclass in `scraper.py`; holds live Playwright page + browser for the ballot
 
 ### Configuration
 

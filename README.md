@@ -58,6 +58,7 @@ cp .env.example .env
 | `WEBHOOK_SECRET` | Shared secret between Cloudflare Worker and webhook |
 | `FROM_EMAIL` | Sender address for outbound emails |
 | `CLAUDE_MODEL` | Claude model to use (default: `claude-sonnet-4-6`) |
+| `DATABASE_PATH` | Path to SQLite database (default: `data/proxy_voter.db`) |
 | `APPROVED_SENDERS` | Comma-separated list of email addresses allowed to use the service |
 | `POLICY_PREFERENCES_PATH` | Path to your voting policy file (default: `policy-preferences.md`) |
 
@@ -95,6 +96,9 @@ uv run uvicorn proxy_voter.main:app --port 8080
 | Component | File | Role |
 |---|---|---|
 | Email Worker | `cloudflare-worker/email-worker.js` | Receives inbound email, forwards raw RFC 822 to webhook |
+| Config | `src/proxy_voter/config.py` | Settings via pydantic-settings, loads from `.env` |
+| Models | `src/proxy_voter/models.py` | Shared Pydantic models and enums |
+| Main | `src/proxy_voter/main.py` | FastAPI app entry point with DB initialization |
 | Webhook | `src/proxy_voter/webhook.py` | Orchestrates the full pipeline |
 | Email Parser | `src/proxy_voter/email_parser.py` | Classifies emails, uses Claude to extract voting URLs |
 | Scraper | `src/proxy_voter/scraper.py` | Opens ballots in headless Chromium |
