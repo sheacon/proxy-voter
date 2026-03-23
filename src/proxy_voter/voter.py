@@ -9,9 +9,9 @@ from proxy_voter.models import VotingDecision
 
 logger = logging.getLogger(__name__)
 
-VOTING_PROMPT = """You are a form automation assistant. Given structured data about form elements \
-on a proxy voting ballot and a list of voting decisions, return the exact actions to perform \
-for each vote.
+VOTING_PROMPT = """You are a form automation assistant. Given numbered form elements \
+on a proxy voting ballot and a list of voting decisions, return the index of the form element \
+to interact with for each vote.
 
 ## Voting Decisions
 
@@ -21,20 +21,19 @@ for each vote.
 
 {page_text}
 
-## Form Element Data
+## Form Elements (numbered)
 
-Each entry below is a form element on the ballot page with its type and attributes.
+Each line is a form element on the ballot page, prefixed with its index number.
 
 {form_data}
 
-## Buttons / Submit Elements
+## Buttons / Submit Elements (numbered)
 
 {button_data}
 
 ## Instructions
 
-For each voting decision, identify which form element to interact with and how. The ballot may \
-use radio buttons, dropdown selects, checkboxes, or other form elements.
+For each voting decision, identify which form element to interact with by its INDEX NUMBER.
 
 Key observations:
 - For radio buttons: buttons are grouped by their `name` attribute — same name = same proposal
@@ -44,23 +43,17 @@ Key observations:
 - Look at the `label` field to determine which value maps to For/Against/Abstain/Withhold
 
 For each vote action, specify:
+- `element_index`: the index number of the form element to interact with (from the list above)
 - `action_type`: "check_radio", "select_option", or "check_checkbox"
-- `selector`: CSS selector for the element (use `#theId` when an id is available, otherwise use \
-`input[name="theName"][value="theValue"]` for radios/checkboxes or `select[name="theName"]` \
-for dropdowns)
 - `value`: for select_option only, the option value to select
 
-CRITICAL: Only use selectors constructed from the ACTUAL `name`, `value`, and `id` fields \
-shown in the form data above. NEVER invent or guess element IDs.
-
-Also identify the submit/vote button. Look for buttons or inputs with text like "Submit Vote", \
-"Submit", "Vote Now", "Cast Votes", etc. Return its CSS selector in the `submit_selector` field.
+Also identify the submit/vote button by its index from the buttons list.
 
 Call the `submit_vote_actions` tool with your results."""
 
 VOTE_ACTION_TOOL = {
     "name": "submit_vote_actions",
-    "description": "Submit the actions to cast each vote and the submit button selector.",
+    "description": "Submit the element index for each vote and the submit button index.",
     "input_schema": {
         "type": "object",
         "properties": {
@@ -74,22 +67,30 @@ VOTE_ACTION_TOOL = {
                             "type": "string",
                             "enum": ["check_radio", "select_option", "check_checkbox"],
                         },
-                        "selector": {"type": "string"},
+                        "element_index": {
+                            "type": "integer",
+                            "description": "Index of the form element from the numbered list",
+                        },
                         "value": {
                             "type": "string",
                             "description": "For select_option: the option value to select",
                         },
                         "matched": {"type": "boolean"},
                     },
-                    "required": ["proposal_number", "action_type", "selector", "matched"],
+                    "required": [
+                        "proposal_number",
+                        "action_type",
+                        "element_index",
+                        "matched",
+                    ],
                 },
             },
-            "submit_selector": {
-                "type": "string",
-                "description": "CSS selector for the submit/vote button on the form.",
+            "submit_button_index": {
+                "type": "integer",
+                "description": "Index of the submit/vote button from the numbered buttons list.",
             },
         },
-        "required": ["actions", "submit_selector"],
+        "required": ["actions", "submit_button_index"],
     },
 }
 
@@ -249,29 +250,28 @@ async def cast_votes(page: Page, decisions: list[VotingDecision]) -> str:
     if not form_data:
         raise RuntimeError("No form elements found on ballot page")
 
-    # Format form data for Claude
+    # Format form data for Claude with index numbers
     form_text_lines = []
-    for f in form_data:
+    for i, f in enumerate(form_data):
         if f["type"] == "radio":
             form_text_lines.append(
-                f'  [radio] name={f["name"]} value={f["value"]} id={f["id"]} label="{f["label"]}"'
+                f'  [{i}] radio name="{f["name"]}" value="{f["value"]}" label="{f["label"]}"'
             )
         elif f["type"] == "select":
             opts = ", ".join(f'{o["value"]}="{o["text"]}"' for o in f.get("options", []))
             form_text_lines.append(
-                f'  [select] name={f["name"]} id={f["id"]} label="{f["label"]}" options=[{opts}]'
+                f'  [{i}] select name="{f["name"]}" label="{f["label"]}" options=[{opts}]'
             )
         elif f["type"] == "checkbox":
             form_text_lines.append(
-                f"  [checkbox] name={f['name']} value={f['value']}"
-                f' id={f["id"]} label="{f["label"]}"'
+                f'  [{i}] checkbox name="{f["name"]}" value="{f["value"]}" label="{f["label"]}"'
             )
     form_text = "\n".join(form_text_lines)
 
-    # Format button data for Claude
+    # Format button data for Claude with index numbers
     button_text = "\n".join(
-        f'  [{b["tag"]}] text="{b["text"]}" id={b["id"]} type={b["type"]} class={b["classes"]}'
-        for b in button_data
+        f'  [{i}] {b["tag"]} text="{b["text"]}" id="{b["id"]}"'
+        for i, b in enumerate(button_data)
     )
 
     # Get page text for context (truncated)
@@ -304,13 +304,13 @@ async def cast_votes(page: Page, decisions: list[VotingDecision]) -> str:
         tool_choice={"type": "tool", "name": "submit_vote_actions"},
     )
 
-    # Extract actions and submit selector from the tool call
+    # Extract actions and submit button index from the tool call
     actions = []
-    submit_selector = None
+    submit_button_index = None
     for block in response.content:
         if block.type == "tool_use" and block.name == "submit_vote_actions":
             actions = block.input.get("actions", [])
-            submit_selector = block.input.get("submit_selector")
+            submit_button_index = block.input.get("submit_button_index")
             break
 
     if not actions:
@@ -321,7 +321,7 @@ async def cast_votes(page: Page, decisions: list[VotingDecision]) -> str:
     # Dismiss modal again in case it appeared during the Claude API call
     await _dismiss_session_modal(page)
 
-    # Execute each action
+    # Execute each action using element indices
     voted = 0
     for action in actions:
         if not action.get("matched"):
@@ -331,34 +331,51 @@ async def cast_votes(page: Page, decisions: list[VotingDecision]) -> str:
             )
             continue
 
-        selector = action["selector"]
+        element_index = action.get("element_index")
         action_type = action["action_type"]
+
+        if element_index is None or element_index < 0 or element_index >= len(form_data):
+            logger.warning(
+                "Proposal %s: invalid element_index %s (form has %d elements)",
+                action.get("proposal_number"),
+                element_index,
+                len(form_data),
+            )
+            continue
+
+        element_info = form_data[element_index]
         try:
             if action_type == "check_radio":
+                locator = _build_locator(page, element_info, "radio")
                 try:
-                    await page.locator(selector).check(timeout=5000)
+                    await locator.check(timeout=5000)
                 except Exception:
-                    await page.locator(selector).check(force=True, timeout=5000)
+                    await locator.check(force=True, timeout=5000)
             elif action_type == "select_option":
-                await page.locator(selector).select_option(action.get("value", ""), timeout=5000)
+                locator = _build_locator(page, element_info, "select")
+                await locator.select_option(action.get("value", ""), timeout=5000)
             elif action_type == "check_checkbox":
+                locator = _build_locator(page, element_info, "checkbox")
                 try:
-                    await page.locator(selector).check(timeout=5000)
+                    await locator.check(timeout=5000)
                 except Exception:
-                    await page.locator(selector).check(force=True, timeout=5000)
+                    await locator.check(force=True, timeout=5000)
             voted += 1
             logger.info(
-                "Voted on proposal %s (%s: %s)",
+                "Voted on proposal %s (index %d: %s name=%s label=%s)",
                 action["proposal_number"],
+                element_index,
                 action_type,
-                selector,
+                element_info.get("name"),
+                element_info.get("label"),
             )
         except Exception:
             logger.warning(
-                "Failed to execute action for proposal %s: %s %s",
+                "Failed to execute action for proposal %s: index %d %s name=%s",
                 action["proposal_number"],
+                element_index,
                 action_type,
-                selector,
+                element_info.get("name"),
             )
 
     logger.info("Executed votes for %d/%d proposals", voted, len(decisions))
@@ -369,13 +386,15 @@ async def cast_votes(page: Page, decisions: list[VotingDecision]) -> str:
     # Dismiss modal before submit
     await _dismiss_session_modal(page)
 
-    # Click submit button
-    if submit_selector:
-        logger.info("Clicking submit button: %s", submit_selector)
+    # Click submit button by index or fallback
+    if submit_button_index is not None and 0 <= submit_button_index < len(button_data):
+        btn = button_data[submit_button_index]
+        logger.info("Clicking submit button index %d: %s", submit_button_index, btn.get("text"))
         try:
-            await page.locator(submit_selector).click(timeout=10000)
+            locator = _build_button_locator(page, btn)
+            await locator.click(timeout=10000)
         except Exception:
-            logger.warning("Claude's submit selector failed, trying generic fallback")
+            logger.warning("Button index %d failed, trying generic fallback", submit_button_index)
             await _click_submit_fallback(page)
     else:
         await _click_submit_fallback(page)
@@ -390,6 +409,45 @@ async def cast_votes(page: Page, decisions: list[VotingDecision]) -> str:
     logger.info("Post-submission page preview: %.200s", confirmation)
 
     return confirmation[:1000]
+
+
+def _css_escape(s: str) -> str:
+    """Escape a string for use in a CSS attribute selector value."""
+    return s.replace("\\", "\\\\").replace('"', '\\"')
+
+
+def _build_locator(page: Page, element_info: dict, element_type: str):
+    """Build a Playwright locator from extracted form element data."""
+    eid = element_info.get("id", "")
+    name = _css_escape(element_info.get("name", ""))
+    value = _css_escape(element_info.get("value", ""))
+
+    if eid:
+        return page.locator(f"#{_css_escape(eid)}")
+
+    tag_map = {"radio": "input", "checkbox": "input", "select": "select"}
+    tag = tag_map.get(element_type, "input")
+    type_attr = f'[type="{element_type}"]' if tag == "input" else ""
+
+    if name and value:
+        return page.locator(f'{tag}{type_attr}[name="{name}"][value="{value}"]')
+    if name:
+        return page.locator(f'{tag}{type_attr}[name="{name}"]').first
+
+    return page.locator(f"{tag}{type_attr}").first
+
+
+def _build_button_locator(page: Page, button_info: dict):
+    """Build a Playwright locator for a button from extracted data."""
+    bid = button_info.get("id", "")
+    text = button_info.get("text", "")
+
+    if bid:
+        return page.locator(f"#{bid}")
+    if text:
+        tag = button_info.get("tag", "button")
+        return page.locator(f'{tag}:has-text("{text}")').first
+    return page.locator("button").first
 
 
 async def _click_submit_fallback(page: Page) -> None:
