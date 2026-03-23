@@ -202,7 +202,10 @@ async def cast_votes(page: Page, decisions: list[VotingDecision]) -> str:
 
         selector = sel["selector"]
         try:
-            await page.click(selector, timeout=5000)
+            # Use check() with force=True because ProxyVote uses custom-styled
+            # radio buttons where the actual <input> is visually hidden.
+            # Regular click() fails actionability checks on hidden inputs.
+            await page.locator(selector).check(force=True, timeout=5000)
             voted += 1
             logger.info(
                 "Voted on proposal %s (selector: %s)",
