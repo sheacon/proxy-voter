@@ -94,9 +94,49 @@ VOTE_ACTION_TOOL = {
 }
 
 
+async def _dismiss_session_modal(page: Page) -> None:
+    """Dismiss any session-about-to-expire modal that may block interactions."""
+    try:
+        modal = page.locator("#session_aboutTo_expire_modal.show")
+        if await modal.count() > 0:
+            logger.info("Dismissing session expiration modal")
+            # Try clicking the continue/OK button inside the modal
+            for btn_text in ["Continue", "OK", "Stay Logged In", "Extend"]:
+                btn = modal.locator(f'button:has-text("{btn_text}")')
+                if await btn.count() > 0:
+                    await btn.first.click(timeout=3000)
+                    await page.wait_for_timeout(500)
+                    return
+            # Fallback: click any primary/action button in the modal
+            btn = modal.locator("button.btn-primary, button.btn-action").first
+            if await btn.count() > 0:
+                await btn.click(timeout=3000)
+                await page.wait_for_timeout(500)
+                return
+            # Last resort: try to hide the modal via JS
+            await page.evaluate("""() => {
+                const modal = document.getElementById('session_aboutTo_expire_modal');
+                if (modal) {
+                    modal.classList.remove('show');
+                    modal.style.display = 'none';
+                    const backdrop = document.querySelector('.modal-backdrop');
+                    if (backdrop) backdrop.remove();
+                    document.body.classList.remove('modal-open');
+                    document.body.style.overflow = '';
+                }
+            }""")
+            await page.wait_for_timeout(500)
+            logger.info("Dismissed modal via JS fallback")
+    except Exception:
+        logger.debug("No session modal to dismiss")
+
+
 async def cast_votes(page: Page, decisions: list[VotingDecision]) -> str:
     """Cast votes by having Claude interpret the form structure and return actions."""
     logger.info("Casting %d votes via Claude-assisted form submission", len(decisions))
+
+    # Dismiss any session modal before interacting with the page
+    await _dismiss_session_modal(page)
 
     # Extract all form elements from the page
     form_data = await page.evaluate("""() => {
@@ -278,6 +318,9 @@ async def cast_votes(page: Page, decisions: list[VotingDecision]) -> str:
 
     logger.info("Claude returned %d vote actions", len(actions))
 
+    # Dismiss modal again in case it appeared during the Claude API call
+    await _dismiss_session_modal(page)
+
     # Execute each action
     voted = 0
     for action in actions:
@@ -323,6 +366,9 @@ async def cast_votes(page: Page, decisions: list[VotingDecision]) -> str:
     if voted == 0:
         raise RuntimeError("Failed to execute any vote actions")
 
+    # Dismiss modal before submit
+    await _dismiss_session_modal(page)
+
     # Click submit button
     if submit_selector:
         logger.info("Clicking submit button: %s", submit_selector)
@@ -348,6 +394,7 @@ async def cast_votes(page: Page, decisions: list[VotingDecision]) -> str:
 
 async def _click_submit_fallback(page: Page) -> None:
     """Try common submit button patterns as a fallback."""
+    await _dismiss_session_modal(page)
     candidates = [
         'button:has-text("Submit")',
         'input[type="submit"]',
