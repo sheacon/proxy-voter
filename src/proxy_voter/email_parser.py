@@ -5,17 +5,65 @@ import re
 from email.message import EmailMessage
 from email.utils import parseaddr
 
+import anthropic
+
 from proxy_voter.config import get_settings
 from proxy_voter.models import EmailType, ParsedEmail
 
 logger = logging.getLogger(__name__)
 
-PROXYVOTE_URL_PATTERN = re.compile(r"https://www\.proxyvote\.com/[A-Za-z0-9_\-]+")
 SESSION_ID_PATTERN = re.compile(r"\[PV-([a-z0-9]+)\]")
-COMPANY_FROM_SUBJECT = re.compile(r"Vote now!\s+(.+?)\s+Annual Meeting", re.IGNORECASE)
+URL_PATTERN = re.compile(r"https?://[^\s<>\"']+")
+
+EMAIL_EXTRACTION_PROMPT = """\
+You are analyzing a forwarded proxy vote notification email. Your task is to identify:
+1. The URL that leads to the online voting platform where the shareholder can cast their votes
+2. The company name for which this proxy vote is being held
+3. The name of the voting platform
+
+Common voting platforms include ProxyVote.com, Broadridge InvestorVote, ISS VoteNow, and others.
+
+## Email Subject
+{subject}
+
+## Email Body
+{body_text}
+
+## URLs Found in Email
+{urls_text}
+
+CRITICAL: The voting_url you return MUST be one of the URLs listed above. Do not invent or modify \
+URLs.
+
+Call the extract_voting_info tool with your findings."""
+
+EMAIL_EXTRACTION_TOOL = {
+    "name": "extract_voting_info",
+    "description": "Extract the voting platform URL and company name from a proxy vote email.",
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "voting_url": {
+                "type": "string",
+                "description": "The URL to the online voting platform. "
+                "Must be one of the URLs provided in the URL list.",
+            },
+            "company_name": {
+                "type": "string",
+                "description": "The company name for which this proxy vote is being held.",
+            },
+            "platform_name": {
+                "type": "string",
+                "description": "The name of the voting platform "
+                "(e.g., ProxyVote.com, Broadridge InvestorVote, ISS VoteNow).",
+            },
+        },
+        "required": ["voting_url", "company_name"],
+    },
+}
 
 
-def parse_email(raw_bytes: bytes) -> ParsedEmail:
+async def parse_email(raw_bytes: bytes) -> ParsedEmail:
     msg = email.message_from_bytes(raw_bytes, policy=email.policy.default)
 
     sender_email = _extract_sender(msg)
@@ -50,36 +98,48 @@ def _parse_approval_reply(
 
 
 def _parse_new_forward(msg: EmailMessage, sender_email: str, subject: str) -> ParsedEmail:
-    # Try to find the original proxy email — either as attachment or inline
-    proxyvote_url = None
+    voting_url = None
     company_name = None
+    platform_name = None
 
     # Check for message/rfc822 attachment (Gmail "Forward as attachment")
     inner_msg = _find_attached_message(msg)
-    if inner_msg:
-        proxyvote_url = _extract_proxyvote_url(inner_msg)
-        company_name = _extract_company_name(inner_msg.get("Subject", ""))
+    source_msg = inner_msg if inner_msg else msg
 
-    # Fall back to searching the body of the outer message (Gmail inline forward)
-    if not proxyvote_url:
-        proxyvote_url = _extract_proxyvote_url(msg)
+    # Extract all URLs from the source message
+    urls = _extract_all_urls(source_msg)
 
-    if not company_name:
-        company_name = _extract_company_name(subject)
+    # Also try the outer message if inner didn't have URLs
+    if not urls and inner_msg:
+        urls = _extract_all_urls(msg)
+
+    # Get text content for Claude
+    body_text = _get_text_body(source_msg)
+    email_subject = source_msg.get("Subject", "") if inner_msg else subject
+
+    if urls:
+        voting_url, company_name, platform_name = _identify_voting_url_and_company(
+            email_subject, body_text, urls
+        )
+
+    # Fall back to outer message if company not found from inner
+    if not company_name and inner_msg:
+        _, company_name, _ = _identify_voting_url_and_company(subject, _get_text_body(msg), urls)
 
     # Detect auto-vote flag in the forwarder's own text
     outer_body = _get_text_body(msg)
     auto_vote = bool(re.search(r"\bauto-vote\b", outer_body, re.IGNORECASE))
 
-    if not proxyvote_url:
-        logger.warning("No ProxyVote URL found in email from %s", sender_email)
+    if not voting_url:
+        logger.warning("No voting URL found in email from %s", sender_email)
 
     return ParsedEmail(
         email_type=EmailType.NEW_FORWARD,
         sender_email=sender_email,
         subject=subject,
-        proxyvote_url=proxyvote_url,
+        voting_url=voting_url,
         company_name=company_name,
+        platform_name=platform_name,
         auto_vote=auto_vote,
     )
 
@@ -95,27 +155,68 @@ def _find_attached_message(msg: EmailMessage) -> EmailMessage | None:
     return None
 
 
-def _extract_proxyvote_url(msg: EmailMessage) -> str | None:
-    html_body = _get_html_body(msg)
-    if html_body:
-        urls = PROXYVOTE_URL_PATTERN.findall(html_body)
-        if urls:
-            return urls[0]
+def _extract_all_urls(msg: EmailMessage) -> list[str]:
+    """Extract and deduplicate all URLs from an email's HTML and text bodies."""
+    urls: list[str] = []
+    seen: set[str] = set()
 
-    text_body = _get_text_body(msg)
-    if text_body:
-        urls = PROXYVOTE_URL_PATTERN.findall(text_body)
-        if urls:
-            return urls[0]
+    for body in (_get_html_body(msg), _get_text_body(msg)):
+        if body:
+            for url in URL_PATTERN.findall(body):
+                if url not in seen:
+                    seen.add(url)
+                    urls.append(url)
 
-    return None
+    return urls
 
 
-def _extract_company_name(subject: str) -> str | None:
-    match = COMPANY_FROM_SUBJECT.search(subject)
-    if match:
-        return match.group(1).strip()
-    return None
+def _identify_voting_url_and_company(
+    subject: str, body_text: str, urls: list[str]
+) -> tuple[str | None, str | None, str | None]:
+    """Use Claude to identify the voting URL and company from an email.
+
+    Returns (voting_url, company_name, platform_name).
+    """
+    if not urls:
+        return None, None, None
+
+    settings = get_settings()
+    client = anthropic.Anthropic(api_key=settings.anthropic_api_key)
+
+    urls_text = "\n".join(f"- {url}" for url in urls)
+    response = client.messages.create(
+        model=settings.claude_model,
+        max_tokens=1024,
+        messages=[
+            {
+                "role": "user",
+                "content": EMAIL_EXTRACTION_PROMPT.format(
+                    subject=subject, body_text=body_text[:5000], urls_text=urls_text
+                ),
+            }
+        ],
+        tools=[EMAIL_EXTRACTION_TOOL],
+        tool_choice={"type": "tool", "name": "extract_voting_info"},
+    )
+
+    for block in response.content:
+        if block.type == "tool_use" and block.name == "extract_voting_info":
+            voting_url = block.input.get("voting_url")
+            company_name = block.input.get("company_name")
+            platform_name = block.input.get("platform_name")
+
+            # Validate URL against actual extracted URLs
+            if voting_url and voting_url not in urls:
+                matched = [u for u in urls if u.startswith(voting_url) or voting_url.startswith(u)]
+                if matched:
+                    voting_url = matched[0]
+                else:
+                    logger.warning("Claude returned URL not found in email: %s", voting_url)
+                    voting_url = None
+
+            return voting_url, company_name, platform_name
+
+    return None, None, None
 
 
 def _get_text_body(msg: EmailMessage) -> str:

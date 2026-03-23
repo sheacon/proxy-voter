@@ -50,7 +50,7 @@ async def receive_email(
 async def _process_email(raw_bytes: bytes) -> None:
     parsed = None
     try:
-        parsed = parse_email(raw_bytes)
+        parsed = await parse_email(raw_bytes)
         logger.info(
             "Parsed email: type=%s sender=%s",
             parsed.email_type,
@@ -79,23 +79,23 @@ async def _process_email(raw_bytes: bytes) -> None:
                     parsed.sender_email,
                     "An unexpected error occurred while processing your proxy vote email.",
                     "Please try forwarding the email again. If the problem persists, "
-                    "you may need to vote manually via the ProxyVote link in the original email.",
+                    "you may need to vote manually via the voting link in the original email.",
                 )
             except Exception:
                 logger.exception("Failed to send error email")
 
 
 async def _handle_new_forward(parsed) -> None:
-    if not parsed.proxyvote_url:
+    if not parsed.voting_url:
         send_error_email(
             parsed.sender_email,
-            "No ProxyVote link was found in the forwarded email.",
-            "Make sure you're forwarding a proxy vote notification email from Charles Schwab.",
+            "No voting platform link was found in the forwarded email.",
+            "Make sure you're forwarding a proxy vote notification email from your broker.",
         )
         return
 
-    logger.info("Opening ballot from %s", parsed.proxyvote_url[:80])
-    session = await open_ballot(parsed.proxyvote_url)
+    logger.info("Opening ballot from %s", parsed.voting_url[:80])
+    session = await open_ballot(parsed.voting_url)
 
     try:
         if not session.ballot.page_text.strip():
@@ -114,21 +114,20 @@ async def _handle_new_forward(parsed) -> None:
 
         if parsed.auto_vote:
             logger.info("Auto-vote enabled, casting votes immediately")
-            # Reload the ballot page — the ProxyVote session likely expired
+            # Reload the ballot page — the voting session likely expired
             # during the research phase (can take several minutes)
-            await session.page.goto(
-                parsed.proxyvote_url, wait_until="domcontentloaded", timeout=60000
-            )
+            await session.page.goto(parsed.voting_url, wait_until="domcontentloaded", timeout=60000)
             try:
-                await session.page.wait_for_selector("text=Submit Vote", timeout=30000)
+                await session.page.wait_for_load_state("networkidle", timeout=30000)
             except Exception:
-                logger.warning("Submit Vote button not found after page reload")
+                logger.warning("Timed out waiting for page reload")
+            await session.page.wait_for_timeout(2000)
             await cast_votes(session.page, decisions)
 
             session_id = await create_session(
                 sender_email=parsed.sender_email,
                 company_name=company_name,
-                proxyvote_url=parsed.proxyvote_url,
+                voting_url=parsed.voting_url,
                 ballot_data=session.ballot,
                 voting_decisions=decisions,
                 metadata=metadata,
@@ -140,7 +139,7 @@ async def _handle_new_forward(parsed) -> None:
             session_id = await create_session(
                 sender_email=parsed.sender_email,
                 company_name=company_name,
-                proxyvote_url=parsed.proxyvote_url,
+                voting_url=parsed.voting_url,
                 ballot_data=session.ballot,
                 voting_decisions=decisions,
                 metadata=metadata,
@@ -192,7 +191,7 @@ async def _handle_approval_reply(parsed) -> None:
 
     # Open a fresh browser session to the ballot page for voting
     logger.info("Approval received for session %s, opening ballot to cast votes", parsed.session_id)
-    ballot_session = await open_ballot(db_session["proxyvote_url"])
+    ballot_session = await open_ballot(db_session["voting_url"])
 
     try:
         await cast_votes(ballot_session.page, decisions)

@@ -9,9 +9,9 @@ from proxy_voter.models import VotingDecision
 
 logger = logging.getLogger(__name__)
 
-SELECTOR_PROMPT = """You are a form automation assistant. Given structured data about \
-radio buttons on a proxy voting ballot and a list of voting decisions, return the \
-exact CSS selector to click for each vote.
+VOTING_PROMPT = """You are a form automation assistant. Given structured data about form elements \
+on a proxy voting ballot and a list of voting decisions, return the exact actions to perform \
+for each vote.
 
 ## Voting Decisions
 
@@ -21,87 +21,102 @@ exact CSS selector to click for each vote.
 
 {page_text}
 
-## Radio Button Data
+## Form Element Data
 
-Each entry below is a radio button on the form with its name, value, id, and the visible label \
-text near it.
+Each entry below is a form element on the ballot page with its type and attributes.
 
-{radio_data}
+{form_data}
+
+## Buttons / Submit Elements
+
+{button_data}
 
 ## Instructions
 
-For each voting decision, identify which radio button to click. Return the CSS selector \
-(use the `id`-based selector like `#theId` when available, otherwise use \
-`input[name="theName"][value="theValue"]`).
+For each voting decision, identify which form element to interact with and how. The ballot may \
+use radio buttons, dropdown selects, checkboxes, or other form elements.
 
 Key observations:
-- Radio groups are typically named `proposalVoteOptions[N]` where N is the index
-- The Nth group corresponds to the Nth proposal on the page
-- Values are often numeric (0=first option, 1=second option, etc.)
+- For radio buttons: buttons are grouped by their `name` attribute — same name = same proposal
+- For select dropdowns: each `<select>` element typically corresponds to one proposal
+- Match proposals to form elements by correlating page text with proposal descriptions
+- The order of form elements on the page typically matches the order of proposals
 - Look at the `label` field to determine which value maps to For/Against/Abstain/Withhold
 
+For each vote action, specify:
+- `action_type`: "check_radio", "select_option", or "check_checkbox"
+- `selector`: CSS selector for the element (use `#theId` when an id is available, otherwise use \
+`input[name="theName"][value="theValue"]` for radios/checkboxes or `select[name="theName"]` \
+for dropdowns)
+- `value`: for select_option only, the option value to select
+
 CRITICAL: Only use selectors constructed from the ACTUAL `name`, `value`, and `id` fields \
-shown in the radio data above. NEVER invent or guess element IDs. If a radio has no `id`, \
-use the `input[name="..."][value="..."]` format instead. The name and value fields are always \
-populated — use them.
+shown in the form data above. NEVER invent or guess element IDs.
 
-Call the `submit_selectors` tool with your results."""
+Also identify the submit/vote button. Look for buttons or inputs with text like "Submit Vote", \
+"Submit", "Vote Now", "Cast Votes", etc. Return its CSS selector in the `submit_selector` field.
 
-SELECTOR_TOOL = {
-    "name": "submit_selectors",
-    "description": "Submit the CSS selectors for each vote.",
+Call the `submit_vote_actions` tool with your results."""
+
+VOTE_ACTION_TOOL = {
+    "name": "submit_vote_actions",
+    "description": "Submit the actions to cast each vote and the submit button selector.",
     "input_schema": {
         "type": "object",
         "properties": {
-            "selectors": {
+            "actions": {
                 "type": "array",
                 "items": {
                     "type": "object",
                     "properties": {
                         "proposal_number": {"type": "string"},
+                        "action_type": {
+                            "type": "string",
+                            "enum": ["check_radio", "select_option", "check_checkbox"],
+                        },
                         "selector": {"type": "string"},
+                        "value": {
+                            "type": "string",
+                            "description": "For select_option: the option value to select",
+                        },
                         "matched": {"type": "boolean"},
                     },
-                    "required": ["proposal_number", "selector", "matched"],
+                    "required": ["proposal_number", "action_type", "selector", "matched"],
                 },
-            }
+            },
+            "submit_selector": {
+                "type": "string",
+                "description": "CSS selector for the submit/vote button on the form.",
+            },
         },
-        "required": ["selectors"],
+        "required": ["actions", "submit_selector"],
     },
 }
 
 
 async def cast_votes(page: Page, decisions: list[VotingDecision]) -> str:
-    """Cast votes by having Claude interpret the form structure and return selectors."""
+    """Cast votes by having Claude interpret the form structure and return actions."""
     logger.info("Casting %d votes via Claude-assisted form submission", len(decisions))
 
-    # Extract structured radio button data — much more useful than raw HTML
-    radio_data = await page.evaluate("""() => {
+    # Extract all form elements from the page
+    form_data = await page.evaluate("""() => {
         const results = [];
-        const radios = document.querySelectorAll('input[type="radio"]');
 
-        for (const radio of radios) {
+        // Radio buttons
+        for (const radio of document.querySelectorAll('input[type="radio"]')) {
             const name = radio.name || '';
             const value = radio.value || '';
             const id = radio.id || '';
-
-            // Get the visible label text for this radio
             let label = '';
 
-            // Method 1: explicit label element
             if (radio.labels && radio.labels.length > 0) {
                 label = radio.labels[0].innerText.trim();
             }
-
-            // Method 2: aria-label
             if (!label) {
                 label = radio.getAttribute('aria-label') || '';
             }
-
-            // Method 3: look at nearby sibling text nodes
             if (!label && radio.parentElement) {
                 const parent = radio.parentElement;
-                // Check for adjacent text or span
                 for (const child of parent.childNodes) {
                     if (child.nodeType === 3 && child.textContent.trim()) {
                         label = child.textContent.trim();
@@ -116,38 +131,107 @@ async def cast_votes(page: Page, decisions: list[VotingDecision]) -> str:
                     }
                 }
             }
-
-            // Method 4: for-attribute label
             if (!label && id) {
                 const lbl = document.querySelector('label[for="' + CSS.escape(id) + '"]');
                 if (lbl) label = lbl.innerText.trim();
             }
 
-            results.push({ name, value, id, label });
+            results.push({ type: 'radio', name, value, id, label });
+        }
+
+        // Select dropdowns
+        for (const select of document.querySelectorAll('select')) {
+            const name = select.name || '';
+            const id = select.id || '';
+            const options = [];
+            for (const opt of select.options) {
+                options.push({ value: opt.value, text: opt.textContent.trim() });
+            }
+            let label = '';
+            if (select.labels && select.labels.length > 0) {
+                label = select.labels[0].innerText.trim();
+            }
+            if (!label && id) {
+                const lbl = document.querySelector('label[for="' + CSS.escape(id) + '"]');
+                if (lbl) label = lbl.innerText.trim();
+            }
+            results.push({ type: 'select', name, id, label, options });
+        }
+
+        // Checkboxes
+        for (const cb of document.querySelectorAll('input[type="checkbox"]')) {
+            const name = cb.name || '';
+            const value = cb.value || '';
+            const id = cb.id || '';
+            let label = '';
+            if (cb.labels && cb.labels.length > 0) {
+                label = cb.labels[0].innerText.trim();
+            }
+            if (!label && id) {
+                const lbl = document.querySelector('label[for="' + CSS.escape(id) + '"]');
+                if (lbl) label = lbl.innerText.trim();
+            }
+            results.push({ type: 'checkbox', name, value, id, label });
         }
 
         return results;
     }""")
 
-    logger.info("Found %d radio inputs on ballot", len(radio_data))
+    # Extract button/submit element candidates
+    button_data = await page.evaluate("""() => {
+        const results = [];
+        const buttons = document.querySelectorAll(
+            'button, input[type="submit"], a.btn, [role="button"]'
+        );
+        for (const btn of buttons) {
+            const text = btn.innerText?.trim() || btn.value || '';
+            if (!text) continue;
+            const tag = btn.tagName.toLowerCase();
+            const id = btn.id || '';
+            const type = btn.type || '';
+            const classes = btn.className || '';
+            results.push({ tag, text, id, type, classes });
+        }
+        return results;
+    }""")
 
-    # Log first few radio entries for debugging
-    for r in radio_data[:5]:
+    logger.info("Found %d form elements and %d buttons on ballot", len(form_data), len(button_data))
+
+    # Log first few form entries for debugging
+    for f in form_data[:5]:
         logger.info(
-            "  Radio: name=%s value=%s id=%s label=%s",
-            r["name"],
-            r["value"],
-            r["id"],
-            r["label"],
+            "  Form element: type=%s name=%s label=%s",
+            f["type"],
+            f.get("name"),
+            f.get("label"),
         )
 
-    if not radio_data:
-        raise RuntimeError("No radio inputs found on ballot page")
+    if not form_data:
+        raise RuntimeError("No form elements found on ballot page")
 
-    # Format radio data for Claude
-    radio_text = "\n".join(
-        f'  name={r["name"]} value={r["value"]} id={r["id"]} label="{r["label"]}"'
-        for r in radio_data
+    # Format form data for Claude
+    form_text_lines = []
+    for f in form_data:
+        if f["type"] == "radio":
+            form_text_lines.append(
+                f'  [radio] name={f["name"]} value={f["value"]} id={f["id"]} label="{f["label"]}"'
+            )
+        elif f["type"] == "select":
+            opts = ", ".join(f'{o["value"]}="{o["text"]}"' for o in f.get("options", []))
+            form_text_lines.append(
+                f'  [select] name={f["name"]} id={f["id"]} label="{f["label"]}" options=[{opts}]'
+            )
+        elif f["type"] == "checkbox":
+            form_text_lines.append(
+                f"  [checkbox] name={f['name']} value={f['value']}"
+                f' id={f["id"]} label="{f["label"]}"'
+            )
+    form_text = "\n".join(form_text_lines)
+
+    # Format button data for Claude
+    button_text = "\n".join(
+        f'  [{b["tag"]}] text="{b["text"]}" id={b["id"]} type={b["type"]} class={b["classes"]}'
+        for b in button_data
     )
 
     # Get page text for context (truncated)
@@ -158,81 +242,97 @@ async def cast_votes(page: Page, decisions: list[VotingDecision]) -> str:
         f"- Proposal {d.proposal_number}: Vote **{d.vote}**" for d in decisions
     )
 
-    # Ask Claude to map decisions to selectors
+    # Ask Claude to map decisions to form actions
     settings = get_settings()
     client = anthropic.Anthropic(api_key=settings.anthropic_api_key)
 
     response = await _create_with_retry(
         client,
+        model=settings.claude_model,
         messages=[
             {
                 "role": "user",
-                "content": SELECTOR_PROMPT.format(
+                "content": VOTING_PROMPT.format(
                     decisions_text=decisions_text,
                     page_text=page_text_truncated,
-                    radio_data=radio_text,
+                    form_data=form_text,
+                    button_data=button_text,
                 ),
             }
         ],
-        tools=[SELECTOR_TOOL],
-        tool_choice={"type": "tool", "name": "submit_selectors"},
+        tools=[VOTE_ACTION_TOOL],
+        tool_choice={"type": "tool", "name": "submit_vote_actions"},
     )
 
-    # Extract the selectors from the tool call
-    selectors = []
+    # Extract actions and submit selector from the tool call
+    actions = []
+    submit_selector = None
     for block in response.content:
-        if block.type == "tool_use" and block.name == "submit_selectors":
-            selectors = block.input.get("selectors", [])
+        if block.type == "tool_use" and block.name == "submit_vote_actions":
+            actions = block.input.get("actions", [])
+            submit_selector = block.input.get("submit_selector")
             break
 
-    if not selectors:
-        raise RuntimeError("Claude did not return any selectors")
+    if not actions:
+        raise RuntimeError("Claude did not return any vote actions")
 
-    logger.info("Claude returned %d selectors", len(selectors))
+    logger.info("Claude returned %d vote actions", len(actions))
 
-    # Click each selector with a short timeout
+    # Execute each action
     voted = 0
-    for sel in selectors:
-        if not sel.get("matched"):
+    for action in actions:
+        if not action.get("matched"):
             logger.warning(
                 "Proposal %s: no match found by Claude",
-                sel.get("proposal_number"),
+                action.get("proposal_number"),
             )
             continue
 
-        selector = sel["selector"]
+        selector = action["selector"]
+        action_type = action["action_type"]
         try:
-            # Use check() with force=True because ProxyVote uses custom-styled
-            # radio buttons where the actual <input> is visually hidden.
-            # Regular click() fails actionability checks on hidden inputs.
-            await page.locator(selector).check(force=True, timeout=5000)
+            if action_type == "check_radio":
+                try:
+                    await page.locator(selector).check(timeout=5000)
+                except Exception:
+                    await page.locator(selector).check(force=True, timeout=5000)
+            elif action_type == "select_option":
+                await page.locator(selector).select_option(action.get("value", ""), timeout=5000)
+            elif action_type == "check_checkbox":
+                try:
+                    await page.locator(selector).check(timeout=5000)
+                except Exception:
+                    await page.locator(selector).check(force=True, timeout=5000)
             voted += 1
             logger.info(
-                "Voted on proposal %s (selector: %s)",
-                sel["proposal_number"],
+                "Voted on proposal %s (%s: %s)",
+                action["proposal_number"],
+                action_type,
                 selector,
             )
         except Exception:
             logger.warning(
-                "Failed to click selector for proposal %s: %s",
-                sel["proposal_number"],
+                "Failed to execute action for proposal %s: %s %s",
+                action["proposal_number"],
+                action_type,
                 selector,
             )
 
-    logger.info("Selected votes for %d/%d proposals", voted, len(decisions))
+    logger.info("Executed votes for %d/%d proposals", voted, len(decisions))
 
     if voted == 0:
-        raise RuntimeError("Failed to click any vote selectors")
+        raise RuntimeError("Failed to execute any vote actions")
 
-    # Click Submit Vote
-    logger.info("Clicking Submit Vote")
-    submit = await page.query_selector('button:has-text("Submit Vote"), input[value="Submit Vote"]')
-    if not submit:
-        submit = await page.query_selector("text=Submit Vote")
-    if not submit:
-        raise RuntimeError("Submit Vote button not found")
-
-    await submit.click()
+    # Click submit button
+    if submit_selector:
+        logger.info("Clicking submit button: %s", submit_selector)
+        try:
+            await page.locator(submit_selector).click(timeout=10000)
+        except Exception:
+            logger.warning("Claude's submit selector failed, trying generic fallback")
+            await _click_submit_fallback(page)
+    else:
+        await _click_submit_fallback(page)
 
     # Wait for confirmation
     try:
@@ -246,13 +346,31 @@ async def cast_votes(page: Page, decisions: list[VotingDecision]) -> str:
     return confirmation[:1000]
 
 
+async def _click_submit_fallback(page: Page) -> None:
+    """Try common submit button patterns as a fallback."""
+    candidates = [
+        'button:has-text("Submit")',
+        'input[type="submit"]',
+        'button:has-text("Vote")',
+        'a:has-text("Submit")',
+    ]
+    for selector in candidates:
+        try:
+            element = await page.query_selector(selector)
+            if element:
+                await element.click()
+                return
+        except Exception:
+            continue
+    raise RuntimeError("Submit button not found")
+
+
 async def _create_with_retry(client, **kwargs) -> anthropic.types.Message:
     """Call messages.create with retry on rate limit errors."""
     max_retries = 5
     for attempt in range(max_retries):
         try:
             return client.messages.create(
-                model="claude-sonnet-4-20250514",
                 max_tokens=4096,
                 **kwargs,
             )

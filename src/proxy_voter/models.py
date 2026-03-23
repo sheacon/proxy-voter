@@ -15,8 +15,9 @@ class ParsedEmail(BaseModel):
     sender_email: str
     subject: str
     # Fields for new forwards
-    proxyvote_url: str | None = None
+    voting_url: str | None = None
     company_name: str | None = None
+    platform_name: str | None = None
     auto_vote: bool = False
     # Fields for approval replies
     session_id: str | None = None
@@ -25,7 +26,7 @@ class ParsedEmail(BaseModel):
 class BallotData(BaseModel):
     page_text: str
     document_urls: list[str]
-    proxyvote_url: str
+    voting_url: str
 
 
 class VotingDecision(BaseModel):

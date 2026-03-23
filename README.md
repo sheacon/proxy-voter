@@ -4,7 +4,7 @@ Automated proxy voting for corporate shareholder ballots. Forward a proxy vote e
 
 ## How it works
 
-1. You receive a proxy vote notification email from your broker (e.g. Charles Schwab via ProxyVote.com)
+1. You receive a proxy vote notification email from your broker (e.g. Charles Schwab, Fidelity, Vanguard, E*TRADE)
 2. Forward it to your configured Proxy Voter email address
 3. Claude researches each proposal using web search, analyzes it against your policy preferences, and recommends votes
 4. You receive an email with recommendations and reasoning for each proposal
@@ -57,6 +57,7 @@ cp .env.example .env
 | `RESEND_API_KEY` | Resend API key for sending emails |
 | `WEBHOOK_SECRET` | Shared secret between Cloudflare Worker and webhook |
 | `FROM_EMAIL` | Sender address for outbound emails |
+| `CLAUDE_MODEL` | Claude model to use (default: `claude-sonnet-4-6`) |
 | `APPROVED_SENDERS` | Comma-separated list of email addresses allowed to use the service |
 | `POLICY_PREFERENCES_PATH` | Path to your voting policy file (default: `policy-preferences.md`) |
 
@@ -95,7 +96,7 @@ uv run uvicorn proxy_voter.main:app --port 8080
 |---|---|---|
 | Email Worker | `cloudflare-worker/email-worker.js` | Receives inbound email, forwards raw RFC 822 to webhook |
 | Webhook | `src/proxy_voter/webhook.py` | Orchestrates the full pipeline |
-| Email Parser | `src/proxy_voter/email_parser.py` | Classifies emails, extracts ProxyVote URLs |
+| Email Parser | `src/proxy_voter/email_parser.py` | Classifies emails, uses Claude to extract voting URLs |
 | Scraper | `src/proxy_voter/scraper.py` | Opens ballots in headless Chromium |
 | Researcher | `src/proxy_voter/researcher.py` | Claude analyzes proposals with web search |
 | Voter | `src/proxy_voter/voter.py` | Claude maps votes to form elements, submits |

@@ -8,7 +8,7 @@ def _make_ballot() -> BallotData:
     return BallotData(
         page_text="1. Approve financials\nBoard Recommendation: For",
         document_urls=[],
-        proxyvote_url="https://www.proxyvote.com/test-token",
+        voting_url="https://www.proxyvote.com/test-token",
     )
 
 
@@ -55,7 +55,7 @@ async def test_create_and_get_session():
     session_id = await create_session(
         sender_email="test@example.com",
         company_name="TEST CORP",
-        proxyvote_url="https://www.proxyvote.com/test-token",
+        voting_url="https://www.proxyvote.com/test-token",
         ballot_data=ballot,
         voting_decisions=decisions,
         metadata=_make_metadata(),
@@ -83,7 +83,7 @@ async def test_update_session_status():
     session_id = await create_session(
         sender_email="test@example.com",
         company_name="TEST CORP",
-        proxyvote_url="https://www.proxyvote.com/test-token",
+        voting_url="https://www.proxyvote.com/test-token",
         ballot_data=ballot,
         voting_decisions=decisions,
         metadata=_make_metadata(),

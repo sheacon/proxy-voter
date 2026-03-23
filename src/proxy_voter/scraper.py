@@ -22,7 +22,7 @@ class BallotSession:
         await self.playwright.stop()
 
 
-async def open_ballot(proxyvote_url: str) -> BallotSession:
+async def open_ballot(voting_url: str) -> BallotSession:
     """Open a ballot page and extract its content.
 
     Returns a BallotSession with the page still open for voting.
@@ -38,24 +38,26 @@ async def open_ballot(proxyvote_url: str) -> BallotSession:
     )
     page = await context.new_page()
 
-    logger.info("Navigating to ProxyVote page: %s", proxyvote_url[:80])
-    await page.goto(proxyvote_url, wait_until="domcontentloaded", timeout=60000)
+    logger.info("Navigating to voting page: %s", voting_url[:80])
+    await page.goto(voting_url, wait_until="domcontentloaded", timeout=60000)
 
-    # Wait for ballot content to render (JS-rendered SPA)
+    # Wait for page to fully load (works for SPAs and static pages)
     try:
-        await page.wait_for_selector("text=Submit Vote", timeout=30000)
+        await page.wait_for_load_state("networkidle", timeout=30000)
     except Exception:
-        logger.warning("Submit Vote button not found. Current URL: %s", page.url)
+        logger.warning("Timed out waiting for networkidle. Current URL: %s", page.url)
+    # Additional wait for any JS rendering to settle
+    await page.wait_for_timeout(2000)
 
     # Get full page text for Claude research
     page_text = await page.evaluate("() => document.body.innerText")
 
-    # Extract document URLs from dropdowns and links
+    # Extract all links from the page
     document_urls = await page.evaluate("""() => {
         const urls = [];
-        const sel = 'a[href*="materials"], a[href*="document"]';
-        for (const link of document.querySelectorAll(sel)) {
-            if (link.href && link.href.startsWith('http')) urls.push(link.href);
+        for (const link of document.querySelectorAll('a[href]')) {
+            const href = link.href;
+            if (href && href.startsWith('http')) urls.push(href);
         }
         for (const select of document.querySelectorAll('select')) {
             for (const option of select.options) {
@@ -72,7 +74,7 @@ async def open_ballot(proxyvote_url: str) -> BallotSession:
     ballot = BallotData(
         page_text=page_text,
         document_urls=document_urls,
-        proxyvote_url=proxyvote_url,
+        voting_url=voting_url,
     )
 
     return BallotSession(ballot=ballot, page=page, browser=browser, playwright=pw)

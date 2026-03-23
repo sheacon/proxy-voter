@@ -18,7 +18,7 @@ CREATE TABLE IF NOT EXISTS sessions (
     created_at TEXT NOT NULL,
     sender_email TEXT NOT NULL,
     company_name TEXT NOT NULL,
-    proxyvote_url TEXT NOT NULL,
+    voting_url TEXT NOT NULL,
     ballot_data TEXT NOT NULL,
     voting_decisions TEXT NOT NULL,
     metadata TEXT NOT NULL,
@@ -42,13 +42,19 @@ def _db_path() -> str:
 async def init_db() -> None:
     async with aiosqlite.connect(_db_path()) as db:
         await db.execute(_CREATE_TABLE)
+        # Migration: rename voting_url -> voting_url if old schema exists
+        cursor = await db.execute("PRAGMA table_info(sessions)")
+        columns = [row[1] for row in await cursor.fetchall()]
+        if "proxyvote_url" in columns and "voting_url" not in columns:
+            await db.execute("ALTER TABLE sessions RENAME COLUMN proxyvote_url TO voting_url")
+            logger.info("Migrated column proxyvote_url -> voting_url")
         await db.commit()
 
 
 async def create_session(
     sender_email: str,
     company_name: str,
-    proxyvote_url: str,
+    voting_url: str,
     ballot_data: BallotData,
     voting_decisions: list[VotingDecision],
     metadata: dict,
@@ -59,7 +65,7 @@ async def create_session(
     async with aiosqlite.connect(_db_path()) as db:
         await db.execute(
             """INSERT INTO sessions
-               (id, created_at, sender_email, company_name, proxyvote_url,
+               (id, created_at, sender_email, company_name, voting_url,
                 ballot_data, voting_decisions, metadata, status)
                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (
@@ -67,7 +73,7 @@ async def create_session(
                 now,
                 sender_email,
                 company_name,
-                proxyvote_url,
+                voting_url,
                 ballot_data.model_dump_json(),
                 json.dumps([d.model_dump() for d in voting_decisions]),
                 json.dumps(metadata),

@@ -173,6 +173,7 @@ like requests for printed materials, attendance preferences, etc."""
 
     response = await _create_with_retry(
         client,
+        model=settings.claude_model,
         system=system,
         tools=tools,
         messages=[{"role": "user", "content": user_message}],
@@ -199,6 +200,7 @@ like requests for printed materials, attendance preferences, etc."""
         # Web search is server-side — continue the conversation
         response = await _create_with_retry(
             client,
+            model=settings.claude_model,
             system=system,
             tools=tools,
             messages=messages,
@@ -219,7 +221,6 @@ async def _create_with_retry(client, **kwargs) -> anthropic.types.Message:
     for attempt in range(max_retries):
         try:
             return client.messages.create(
-                model="claude-sonnet-4-20250514",
                 max_tokens=8192,
                 **kwargs,
             )
