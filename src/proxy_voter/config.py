@@ -15,6 +15,7 @@ class Settings(BaseSettings):
     database_path: str = "data/proxy_voter.db"
     approved_senders: str = ""
     policy_preferences_path: str = "policy-preferences.md"
+    test_ballot_url: str = ""
 
     def load_approved_senders(self) -> set[str]:
         if not self.approved_senders.strip():

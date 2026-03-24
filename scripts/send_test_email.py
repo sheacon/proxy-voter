@@ -2,11 +2,10 @@
 """Send a test proxy vote email for end-to-end pipeline testing.
 
 Usage:
-    uv run python scripts/send_test_email.py --to shea.conaway@gmail.com
-    uv run python scripts/send_test_email.py --to shea.conaway@gmail.com --auto-vote
+    uv run python scripts/send_test_email.py --to user@example.com
 
 The recipient then forwards the email to the proxy-voter inbound address.
-The email links to the fake ballot page at ballot.example.org.
+The email links to the fake ballot page configured via TEST_BALLOT_URL.
 """
 
 import argparse
@@ -15,12 +14,11 @@ import resend
 
 from proxy_voter.config import get_settings
 
-BALLOT_URL = "https://ballot.example.org"
-PROXY_STATEMENT_URL = "https://ballot.example.org/proxy-statement"
-ANNUAL_REPORT_URL = "https://ballot.example.org/annual-report"
 
+def build_email_html(ballot_url: str) -> str:
+    proxy_statement_url = f"{ballot_url}/proxy-statement"
+    annual_report_url = f"{ballot_url}/annual-report"
 
-def build_email_html() -> str:
     return f"""\
 <!DOCTYPE html>
 <html>
@@ -63,7 +61,7 @@ def build_email_html() -> str:
     </table>
 
     <div style="text-align: center; margin: 24px 0;">
-      <a href="{BALLOT_URL}"
+      <a href="{ballot_url}"
          style="display: inline-block; background: #037DAE; color: white; padding: 14px 48px;
                 text-decoration: none; border-radius: 6px; font-size: 16px; font-weight: 600;">
         VOTE NOW
@@ -72,16 +70,15 @@ def build_email_html() -> str:
 
     <p style="font-size: 14px; color: #555;">
       Review the
-      <a href="{PROXY_STATEMENT_URL}" style="color: #037DAE;">Proxy Statement</a> and
-      <a href="{ANNUAL_REPORT_URL}" style="color: #037DAE;">2025 Annual Report</a>
+      <a href="{proxy_statement_url}" style="color: #037DAE;">Proxy Statement</a> and
+      <a href="{annual_report_url}" style="color: #037DAE;">2025 Annual Report</a>
       before casting your vote.
     </p>
   </div>
 
   <div style="padding: 16px 32px; background: #f8f9fa; font-size: 12px; color: #666;
               border-top: 1px solid #dee2e6;">
-    <p>This is a test email for Proxy Voter end-to-end testing.
-    The ballot page is hosted at ballot.example.org.</p>
+    <p>This is a test email for Proxy Voter end-to-end testing.</p>
   </div>
 </div>
 </body>
@@ -94,6 +91,11 @@ def main() -> None:
     args = parser.parse_args()
 
     settings = get_settings()
+    if not settings.test_ballot_url:
+        print("Error: TEST_BALLOT_URL is not set in .env")
+        print("Set it to the URL of your fake ballot page (e.g. https://ballot.example.com)")
+        raise SystemExit(1)
+
     resend.api_key = settings.resend_api_key
 
     result = resend.Emails.send(
@@ -101,7 +103,7 @@ def main() -> None:
             "from": f"CHARLES SCHWAB & CO., INC. <{settings.from_email}>",
             "to": [args.to],
             "subject": "Vote now! MOODY'S CORPORATION Annual Meeting",
-            "html": build_email_html(),
+            "html": build_email_html(settings.test_ballot_url),
         }
     )
     print(f"Test email sent to {args.to} (id: {result.get('id', 'unknown')})")
