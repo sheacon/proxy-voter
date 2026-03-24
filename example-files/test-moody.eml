@@ -1,0 +1,65 @@
+From: "CHARLES SCHWAB & CO., INC." <id@proxyvote.com>
+To: SHEA.CONAWAY@GMAIL.COM
+Subject: Vote now! MOODY'S CORPORATION Annual Meeting
+Reply-To: registrar@proxyvote.com
+Date: Sat, 07 Mar 2026 04:06:53 -0500
+MIME-Version: 1.0
+Content-Type: multipart/alternative;
+ boundary="===============5765387945749711130=="
+
+--===============5765387945749711130==
+Content-Type: text/plain; charset="utf-8"
+Content-Transfer-Encoding: quoted-printable
+
+Dear Shareholder,
+
+You are receiving this notification because you hold shares of MOODY'S CORPOR=
+ATION
+(CUSIP: 615369105) in your Charles Schwab brokerage account.
+
+Meeting Date: April 22, 2026
+Voting Deadline: April 21, 2026, 11:59 PM ET
+Control Number: 999999999999
+Shares: 150
+
+Vote now: https://ballot.example.org
+
+Review the Proxy Statement: https://ballot.example.org/proxy-statement
+Review the 2025 Annual Report: https://ballot.example.org/annual-report
+
+This is a test email for Proxy Voter end-to-end testing.
+
+--===============5765387945749711130==
+Content-Type: text/html; charset="utf-8"
+Content-Transfer-Encoding: quoted-printable
+MIME-Version: 1.0
+
+<!DOCTYPE html>
+<html>
+<head><meta charset=3D"UTF-8"></head>
+<body>
+<h2>CHARLES SCHWAB &amp; CO., INC.</h2>
+<h3>Vote now! MOODY'S CORPORATION Annual Meeting</h3>
+<p>Dear Shareholder,</p>
+<p>You are receiving this notification because you hold shares of
+<strong>MOODY'S CORPORATION</strong> (CUSIP: 615369105) in your
+Charles Schwab brokerage account.</p>
+<table>
+<tr><td><strong>Meeting Date:</strong></td><td>April 22, 2026</td></tr>
+<tr><td><strong>Voting Deadline:</strong></td><td>April 21, 2026, 11:59 PM ET=
+</td></tr>
+<tr><td><strong>Control Number:</strong></td><td>999999999999</td></tr>
+<tr><td><strong>Shares:</strong></td><td>150</td></tr>
+</table>
+<p><a href=3D"https://ballot.example.org" style=3D"background:#037DAE;color:=
+white;padding:14px 48px;text-decoration:none;border-radius:6px;font-size:16px=
+;font-weight:600;">VOTE NOW</a></p>
+<p>Review the <a href=3D"https://ballot.example.org/proxy-statement">Proxy S=
+tatement</a> and <a href=3D"https://ballot.example.org/annual-report">2025 A=
+nnual Report</a> before casting your vote.</p>
+<p style=3D"font-size:12px;color:#666;">This is a test email for Proxy Voter =
+end-to-end testing.</p>
+</body>
+</html>
+
+--===============5765387945749711130==--
