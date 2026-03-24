@@ -185,24 +185,13 @@ async def research_proposals(
         (1 - len(cleaned_text) / len(ballot.page_text)) * 100 if ballot.page_text else 0,
     )
 
-    user_message = f"""Below is the raw text content scraped from a proxy voting ballot page. \
-Please identify all proposals, research them, and submit your voting recommendations.
-
-## Raw Ballot Page Text
+    user_message = f"""## Raw Ballot Page Text
 
 {cleaned_text}
 {doc_urls_text}
 
-## Instructions
-
-1. First, identify the company, meeting date, voting deadline, shares, and all proposals from \
-the ballot text above
-2. Search for the company's investor relations page for proxy materials and context
-3. Research each proposal and recommend a vote
-4. Submit your decisions using the submit_voting_decisions tool
-
-Important: Only include actual voting proposals in your decisions. Skip non-proposal content \
-like requests for printed materials, attendance preferences, etc."""
+Only include actual voting proposals in your decisions. Skip non-proposal content like \
+requests for printed materials, attendance preferences, etc."""
 
     logger.info("Sending ballot to research agent (%d chars of page text)", len(cleaned_text))
 
