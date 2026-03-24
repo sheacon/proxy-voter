@@ -3,5 +3,5 @@ main = "ballot-worker.js"
 compatibility_date = "2024-09-23"
 
 routes = [
-  { pattern = "ballot.example.org", custom_domain = true }
+  { pattern = "ballot.yourdomain.com", custom_domain = true }
 ]

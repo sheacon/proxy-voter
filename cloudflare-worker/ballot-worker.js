@@ -1,6 +1,6 @@
 /**
  * Fake proxy voting ballot page for end-to-end testing.
- * Serves a realistic Moody's Corporation ballot at ballot.example.org.
+ * Serves a realistic Moody's Corporation ballot for e2e testing.
  *
  * Routes:
  *   GET  /                 — Ballot page with radio buttons and submit

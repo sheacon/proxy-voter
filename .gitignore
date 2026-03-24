@@ -17,3 +17,5 @@ venv/
 .mypy_cache/
 node_modules/
 .wrangler/
+ballot-wrangler.toml
+.coverage
