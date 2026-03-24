@@ -10,7 +10,7 @@ from proxy_voter.email_parser import (
     parse_email,
     validate_sender,
 )
-from proxy_voter.models import EmailType
+from proxy_voter.models import EmailType, UsageStats
 
 FIXTURES_DIR = Path(__file__).parent.parent / "example-files"
 _has_fixtures = FIXTURES_DIR.is_dir() and any(FIXTURES_DIR.glob("*.eml"))
@@ -25,7 +25,7 @@ def _mock_identify(voting_url: str, company_name: str, platform_name: str = "Pro
     """Return a patch context manager that mocks _identify_voting_url_and_company."""
     return patch(
         "proxy_voter.email_parser._identify_voting_url_and_company",
-        return_value=(voting_url, company_name, platform_name),
+        return_value=(voting_url, company_name, platform_name, UsageStats()),
     )
 
 
@@ -73,7 +73,7 @@ class TestParseDirectEmail:
     async def test_parse_ubs_email(self) -> None:
         raw = _load_eml("example-proxy-email.eml")
         with _mock_identify("https://www.proxyvote.com/0abc", "UBS GROUP AG", "ProxyVote.com"):
-            parsed = await parse_email(raw)
+            parsed, _ = await parse_email(raw)
         assert parsed.email_type == EmailType.NEW_FORWARD
         assert parsed.sender_email == "id@proxyvote.com"
         assert parsed.voting_url == "https://www.proxyvote.com/0abc"
@@ -83,14 +83,14 @@ class TestParseDirectEmail:
     async def test_parse_enbridge_email(self) -> None:
         raw = _load_eml("example-proxy-email-1.eml")
         with _mock_identify("https://www.proxyvote.com/0def", "ENBRIDGE INC.", "ProxyVote.com"):
-            parsed = await parse_email(raw)
+            parsed, _ = await parse_email(raw)
         assert parsed.company_name == "ENBRIDGE INC."
         assert parsed.voting_url is not None
 
     async def test_parse_nestle_email(self) -> None:
         raw = _load_eml("example-proxy-email-2.eml")
         with _mock_identify("https://www.proxyvote.com/0ghi", "NESTLE S.A.", "ProxyVote.com"):
-            parsed = await parse_email(raw)
+            parsed, _ = await parse_email(raw)
         assert parsed.company_name == "NESTLE S.A."
         assert parsed.voting_url is not None
 
@@ -101,14 +101,14 @@ class TestParseDirectEmail:
             "UNITED PARCEL SERVICE, INC.",
             "ProxyVote.com",
         ):
-            parsed = await parse_email(raw)
+            parsed, _ = await parse_email(raw)
         assert parsed.company_name == "UNITED PARCEL SERVICE, INC."
         assert parsed.voting_url is not None
 
     async def test_parse_ge_email(self) -> None:
         raw = _load_eml("example-proxy-email-4.eml")
         with _mock_identify("https://www.proxyvote.com/0mno", "GE AEROSPACE", "ProxyVote.com"):
-            parsed = await parse_email(raw)
+            parsed, _ = await parse_email(raw)
         assert parsed.company_name == "GE AEROSPACE"
         assert parsed.voting_url is not None
 
@@ -155,7 +155,7 @@ class TestParseForwardedEmail:
     async def test_inline_forward_extracts_url(self) -> None:
         raw = self._make_inline_forward()
         with _mock_identify("https://www.proxyvote.com/0abc", "UBS GROUP AG", "ProxyVote.com"):
-            parsed = await parse_email(raw)
+            parsed, _ = await parse_email(raw)
         assert parsed.email_type == EmailType.NEW_FORWARD
         assert parsed.sender_email == "user@example.com"
         assert parsed.voting_url is not None
@@ -164,19 +164,19 @@ class TestParseForwardedEmail:
     async def test_inline_forward_auto_vote(self) -> None:
         raw = self._make_inline_forward(user_text="auto-vote")
         with _mock_identify("https://www.proxyvote.com/0abc", "UBS GROUP AG", "ProxyVote.com"):
-            parsed = await parse_email(raw)
+            parsed, _ = await parse_email(raw)
         assert parsed.auto_vote is True
 
     async def test_inline_forward_auto_vote_case_insensitive(self) -> None:
         raw = self._make_inline_forward(user_text="Please Auto-Vote this one")
         with _mock_identify("https://www.proxyvote.com/0abc", "UBS GROUP AG", "ProxyVote.com"):
-            parsed = await parse_email(raw)
+            parsed, _ = await parse_email(raw)
         assert parsed.auto_vote is True
 
     async def test_inline_forward_no_flag(self) -> None:
         raw = self._make_inline_forward(user_text="Please handle this proxy vote")
         with _mock_identify("https://www.proxyvote.com/0abc", "UBS GROUP AG", "ProxyVote.com"):
-            parsed = await parse_email(raw)
+            parsed, _ = await parse_email(raw)
         assert parsed.auto_vote is False
 
     async def test_inline_forward_different_emails(self) -> None:
@@ -191,7 +191,7 @@ class TestParseForwardedEmail:
             with _mock_identify(
                 "https://www.proxyvote.com/0test", expected_company, "ProxyVote.com"
             ):
-                parsed = await parse_email(raw)
+                parsed, _ = await parse_email(raw)
             assert parsed.voting_url is not None, f"No URL for {eml_name}"
             assert parsed.company_name == expected_company, f"Bad company for {eml_name}"
 
@@ -212,20 +212,20 @@ class TestParseApprovalReply:
 
     async def test_approval_reply(self) -> None:
         raw = self._make_approval_reply()
-        parsed = await parse_email(raw)
+        parsed, _ = await parse_email(raw)
         assert parsed.email_type == EmailType.APPROVAL_REPLY
         assert parsed.session_id == "PV-abc123"
         assert parsed.sender_email == "user@example.com"
 
     async def test_approval_with_extra_text(self) -> None:
         raw = self._make_approval_reply(body="Looks good, approved!\n\nThanks")
-        parsed = await parse_email(raw)
+        parsed, _ = await parse_email(raw)
         assert parsed.email_type == EmailType.APPROVAL_REPLY
         assert parsed.session_id == "PV-abc123"
 
     async def test_different_session_id(self) -> None:
         raw = self._make_approval_reply(session_id="PV-xyz789")
-        parsed = await parse_email(raw)
+        parsed, _ = await parse_email(raw)
         assert parsed.session_id == "PV-xyz789"
 
 

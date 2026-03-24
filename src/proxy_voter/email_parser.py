@@ -8,7 +8,7 @@ from email.utils import parseaddr
 import anthropic
 
 from proxy_voter.config import get_settings
-from proxy_voter.models import EmailType, ParsedEmail
+from proxy_voter.models import EmailType, ParsedEmail, UsageStats
 
 logger = logging.getLogger(__name__)
 
@@ -63,7 +63,7 @@ EMAIL_EXTRACTION_TOOL = {
 }
 
 
-async def parse_email(raw_bytes: bytes) -> ParsedEmail:
+async def parse_email(raw_bytes: bytes) -> tuple[ParsedEmail, UsageStats]:
     msg = email.message_from_bytes(raw_bytes, policy=email.policy.default)
 
     sender_email = _extract_sender(msg)
@@ -72,7 +72,8 @@ async def parse_email(raw_bytes: bytes) -> ParsedEmail:
     # Classify: approval reply or new forward?
     session_match = SESSION_ID_PATTERN.search(subject)
     if session_match:
-        return _parse_approval_reply(msg, sender_email, subject, session_match.group(1))
+        parsed = _parse_approval_reply(msg, sender_email, subject, session_match.group(1))
+        return parsed, UsageStats()
 
     return _parse_new_forward(msg, sender_email, subject)
 
@@ -97,10 +98,13 @@ def _parse_approval_reply(
     )
 
 
-def _parse_new_forward(msg: EmailMessage, sender_email: str, subject: str) -> ParsedEmail:
+def _parse_new_forward(
+    msg: EmailMessage, sender_email: str, subject: str
+) -> tuple[ParsedEmail, UsageStats]:
     voting_url = None
     company_name = None
     platform_name = None
+    usage = UsageStats()
 
     # Check for message/rfc822 attachment (Gmail "Forward as attachment")
     inner_msg = _find_attached_message(msg)
@@ -118,13 +122,17 @@ def _parse_new_forward(msg: EmailMessage, sender_email: str, subject: str) -> Pa
     email_subject = source_msg.get("Subject", "") if inner_msg else subject
 
     if urls:
-        voting_url, company_name, platform_name = _identify_voting_url_and_company(
+        voting_url, company_name, platform_name, call_usage = _identify_voting_url_and_company(
             email_subject, body_text, urls
         )
+        usage.merge(call_usage)
 
     # Fall back to outer message if company not found from inner
     if not company_name and inner_msg:
-        _, company_name, _ = _identify_voting_url_and_company(subject, _get_text_body(msg), urls)
+        _, company_name, _, call_usage = _identify_voting_url_and_company(
+            subject, _get_text_body(msg), urls
+        )
+        usage.merge(call_usage)
 
     # Detect auto-vote flag in the forwarder's own text
     outer_body = _get_text_body(msg)
@@ -141,7 +149,7 @@ def _parse_new_forward(msg: EmailMessage, sender_email: str, subject: str) -> Pa
         company_name=company_name,
         platform_name=platform_name,
         auto_vote=auto_vote,
-    )
+    ), usage
 
 
 def _find_attached_message(msg: EmailMessage) -> EmailMessage | None:
@@ -172,13 +180,14 @@ def _extract_all_urls(msg: EmailMessage) -> list[str]:
 
 def _identify_voting_url_and_company(
     subject: str, body_text: str, urls: list[str]
-) -> tuple[str | None, str | None, str | None]:
+) -> tuple[str | None, str | None, str | None, UsageStats]:
     """Use Claude to identify the voting URL and company from an email.
 
-    Returns (voting_url, company_name, platform_name).
+    Returns (voting_url, company_name, platform_name, usage_stats).
     """
+    usage = UsageStats()
     if not urls:
-        return None, None, None
+        return None, None, None, usage
 
     settings = get_settings()
     client = anthropic.Anthropic(api_key=settings.anthropic_api_key)
@@ -198,6 +207,12 @@ def _identify_voting_url_and_company(
         tools=[EMAIL_EXTRACTION_TOOL],
         tool_choice={"type": "tool", "name": "extract_voting_info"},
     )
+    usage.add(settings.claude_model, response.usage)
+    logger.info(
+        "Email parser API usage: in=%d, out=%d",
+        response.usage.input_tokens,
+        response.usage.output_tokens,
+    )
 
     for block in response.content:
         if block.type == "tool_use" and block.name == "extract_voting_info":
@@ -214,9 +229,9 @@ def _identify_voting_url_and_company(
                     logger.warning("Claude returned URL not found in email: %s", voting_url)
                     voting_url = None
 
-            return voting_url, company_name, platform_name
+            return voting_url, company_name, platform_name, usage
 
-    return None, None, None
+    return None, None, None, usage
 
 
 def _get_text_body(msg: EmailMessage) -> str:

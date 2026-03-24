@@ -1,10 +1,11 @@
 import asyncio
 import logging
+import re
 
 import anthropic
 
 from proxy_voter.config import get_settings
-from proxy_voter.models import BallotData, VotingDecision
+from proxy_voter.models import BallotData, UsageStats, VotingDecision
 
 logger = logging.getLogger(__name__)
 
@@ -26,6 +27,8 @@ You will receive the raw text content of a proxy voting ballot page. Your job is
 
 ## Guidelines
 
+- Be efficient with web searches. Focus on the company's latest proxy statement and any major \
+controversies. Avoid redundant searches.
 - For compensation-related proposals: the shareholder is generally opposed to management-backed \
 compensation proposals. Research whether the compensation is reasonable relative to peers and \
 tied to long-term performance before recommending.
@@ -127,14 +130,44 @@ VOTING_DECISIONS_TOOL = {
 }
 
 
-async def research_proposals(ballot: BallotData) -> tuple[dict, list[VotingDecision]]:
-    """Research proposals and return (ballot_metadata, decisions).
+# Patterns to strip from ballot page text (case-insensitive)
+_BOILERPLATE_PATTERNS = [
+    r"(?i)^.*cookie\s*(policy|preferences|settings|consent).*$",
+    r"(?i)^.*privacy\s*(policy|notice|statement).*$",
+    r"(?i)^.*terms\s*(of\s*use|of\s*service|&\s*conditions).*$",
+    r"(?i)^.*copyright\s*©?\s*\d{4}.*$",
+    r"(?i)^.*all\s*rights\s*reserved.*$",
+    r"(?i)^.*powered\s*by\s+.*$",
+    r"(?i)^accept(\s+all)?\s*$",
+    r"(?i)^reject(\s+all)?\s*$",
+    r"(?i)^(manage|customize)\s*cookies?\s*$",
+]
+_BOILERPLATE_RE = re.compile("|".join(_BOILERPLATE_PATTERNS), re.MULTILINE)
+_SEPARATOR_RE = re.compile(r"^[\s\-=*_]{4,}$", re.MULTILINE)
+_BLANK_LINES_RE = re.compile(r"\n{3,}")
+_BARE_URL_RE = re.compile(r"^https?://\S+$", re.MULTILINE)
+
+
+def _clean_ballot_text(text: str) -> str:
+    """Remove boilerplate noise from ballot page text. No truncation."""
+    text = _BOILERPLATE_RE.sub("", text)
+    text = _SEPARATOR_RE.sub("", text)
+    text = _BARE_URL_RE.sub("", text)
+    text = _BLANK_LINES_RE.sub("\n\n", text)
+    return text.strip()
+
+
+async def research_proposals(
+    ballot: BallotData,
+) -> tuple[dict, list[VotingDecision], UsageStats]:
+    """Research proposals and return (ballot_metadata, decisions, usage_stats).
 
     ballot_metadata contains company_name, meeting_date, voting_deadline, etc.
     extracted by Claude from the raw page text.
     """
     settings = get_settings()
     policy_preferences = settings.load_policy_preferences()
+    usage = UsageStats()
 
     client = anthropic.Anthropic(api_key=settings.anthropic_api_key)
 
@@ -144,12 +177,20 @@ async def research_proposals(ballot: BallotData) -> tuple[dict, list[VotingDecis
             f"- {url}" for url in ballot.document_urls
         )
 
+    cleaned_text = _clean_ballot_text(ballot.page_text)
+    logger.info(
+        "Cleaned ballot text: %d -> %d chars (%.0f%% reduction)",
+        len(ballot.page_text),
+        len(cleaned_text),
+        (1 - len(cleaned_text) / len(ballot.page_text)) * 100 if ballot.page_text else 0,
+    )
+
     user_message = f"""Below is the raw text content scraped from a proxy voting ballot page. \
 Please identify all proposals, research them, and submit your voting recommendations.
 
 ## Raw Ballot Page Text
 
-{ballot.page_text}
+{cleaned_text}
 {doc_urls_text}
 
 ## Instructions
@@ -163,11 +204,11 @@ the ballot text above
 Important: Only include actual voting proposals in your decisions. Skip non-proposal content \
 like requests for printed materials, attendance preferences, etc."""
 
-    logger.info("Sending ballot to research agent (%d chars of page text)", len(ballot.page_text))
+    logger.info("Sending ballot to research agent (%d chars of page text)", len(cleaned_text))
 
     system = SYSTEM_PROMPT.format(policy_preferences=policy_preferences)
     tools = [
-        {"type": "web_search_20250305", "name": "web_search", "max_uses": 10},
+        {"type": "web_search_20250305", "name": "web_search", "max_uses": 5},
         VOTING_DECISIONS_TOOL,
     ]
 
@@ -177,19 +218,22 @@ like requests for printed materials, attendance preferences, etc."""
         system=system,
         tools=tools,
         messages=[{"role": "user", "content": user_message}],
+        cache_control={"type": "ephemeral"},
     )
+    usage.add(settings.claude_model, response.usage)
+    logger.info("Research turn 1: %s", _format_usage(response.usage))
 
     messages = [
         {"role": "user", "content": user_message},
         {"role": "assistant", "content": response.content},
     ]
 
-    max_turns = 15
-    for _ in range(max_turns):
+    max_turns = 8
+    for turn in range(max_turns):
         # Check if the submit_voting_decisions tool was called
         for block in response.content:
             if block.type == "tool_use" and block.name == "submit_voting_decisions":
-                return _parse_results(block.input)
+                return *_parse_results(block.input), usage
 
         if response.stop_reason == "end_turn":
             break
@@ -204,15 +248,33 @@ like requests for printed materials, attendance preferences, etc."""
             system=system,
             tools=tools,
             messages=messages,
+            cache_control={"type": "ephemeral"},
         )
+        usage.add(settings.claude_model, response.usage)
+        logger.info("Research turn %d: %s", turn + 2, _format_usage(response.usage))
         messages.append({"role": "assistant", "content": response.content})
 
     # Final check
     for block in response.content:
         if block.type == "tool_use" and block.name == "submit_voting_decisions":
-            return _parse_results(block.input)
+            return *_parse_results(block.input), usage
 
     raise RuntimeError("Research agent did not submit voting decisions")
+
+
+def _format_usage(usage: object) -> str:
+    """Format an anthropic usage object for logging."""
+    parts = [
+        f"in={getattr(usage, 'input_tokens', 0)}",
+        f"out={getattr(usage, 'output_tokens', 0)}",
+    ]
+    cache_read = getattr(usage, "cache_read_input_tokens", 0) or 0
+    cache_write = getattr(usage, "cache_creation_input_tokens", 0) or 0
+    if cache_read:
+        parts.append(f"cache_read={cache_read}")
+    if cache_write:
+        parts.append(f"cache_write={cache_write}")
+    return ", ".join(parts)
 
 
 async def _create_with_retry(client, **kwargs) -> anthropic.types.Message:
@@ -221,7 +283,7 @@ async def _create_with_retry(client, **kwargs) -> anthropic.types.Message:
     for attempt in range(max_retries):
         try:
             return client.messages.create(
-                max_tokens=8192,
+                max_tokens=4096,
                 **kwargs,
             )
         except anthropic.RateLimitError:

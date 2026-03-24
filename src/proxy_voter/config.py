@@ -11,6 +11,7 @@ class Settings(BaseSettings):
     webhook_secret: str
     from_email: str
     claude_model: str = "claude-sonnet-4-6"
+    claude_voter_model: str = "claude-haiku-4-5"
     database_path: str = "data/proxy_voter.db"
     approved_senders: str = ""
     policy_preferences_path: str = "policy-preferences.md"

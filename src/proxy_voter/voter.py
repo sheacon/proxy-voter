@@ -5,7 +5,7 @@ import anthropic
 from playwright.async_api import Page
 
 from proxy_voter.config import get_settings
-from proxy_voter.models import VotingDecision
+from proxy_voter.models import UsageStats, VotingDecision
 
 logger = logging.getLogger(__name__)
 
@@ -132,7 +132,7 @@ async def _dismiss_session_modal(page: Page) -> None:
         logger.debug("No session modal to dismiss")
 
 
-async def cast_votes(page: Page, decisions: list[VotingDecision]) -> str:
+async def cast_votes(page: Page, decisions: list[VotingDecision]) -> tuple[str, UsageStats]:
     """Cast votes by having Claude interpret the form structure and return actions."""
     logger.info("Casting %d votes via Claude-assisted form submission", len(decisions))
 
@@ -270,8 +270,7 @@ async def cast_votes(page: Page, decisions: list[VotingDecision]) -> str:
 
     # Format button data for Claude with index numbers
     button_text = "\n".join(
-        f'  [{i}] {b["tag"]} text="{b["text"]}" id="{b["id"]}"'
-        for i, b in enumerate(button_data)
+        f'  [{i}] {b["tag"]} text="{b["text"]}" id="{b["id"]}"' for i, b in enumerate(button_data)
     )
 
     # Get page text for context (truncated)
@@ -285,10 +284,11 @@ async def cast_votes(page: Page, decisions: list[VotingDecision]) -> str:
     # Ask Claude to map decisions to form actions
     settings = get_settings()
     client = anthropic.Anthropic(api_key=settings.anthropic_api_key)
+    usage = UsageStats()
 
     response = await _create_with_retry(
         client,
-        model=settings.claude_model,
+        model=settings.claude_voter_model,
         messages=[
             {
                 "role": "user",
@@ -302,6 +302,12 @@ async def cast_votes(page: Page, decisions: list[VotingDecision]) -> str:
         ],
         tools=[VOTE_ACTION_TOOL],
         tool_choice={"type": "tool", "name": "submit_vote_actions"},
+    )
+    usage.add(settings.claude_voter_model, response.usage)
+    logger.info(
+        "Voter API usage: in=%d, out=%d",
+        response.usage.input_tokens,
+        response.usage.output_tokens,
     )
 
     # Extract actions and submit button index from the tool call
@@ -318,81 +324,8 @@ async def cast_votes(page: Page, decisions: list[VotingDecision]) -> str:
 
     logger.info("Claude returned %d vote actions", len(actions))
 
-    # The Claude API call may have taken minutes (rate limits). The page likely
-    # expired or navigated away during that time. Reload and re-extract form data
-    # so the element indices remain valid.
-    voting_url = page.url
-    logger.info("Reloading ballot page before executing votes: %s", voting_url[:80])
-    await page.reload(wait_until="domcontentloaded", timeout=60000)
-    try:
-        await page.wait_for_load_state("networkidle", timeout=30000)
-    except Exception:
-        logger.warning("Timed out waiting for page reload networkidle")
-    await page.wait_for_timeout(2000)
+    # Dismiss any modal that may have appeared during the Claude API call
     await _dismiss_session_modal(page)
-
-    # Re-extract form data after reload so indices match the live page
-    form_data = await page.evaluate("""() => {
-        const results = [];
-        for (const radio of document.querySelectorAll('input[type="radio"]')) {
-            results.push({
-                type: 'radio',
-                name: radio.name || '',
-                value: radio.value || '',
-                id: radio.id || '',
-                label: (() => {
-                    if (radio.labels && radio.labels.length > 0)
-                        return radio.labels[0].innerText.trim();
-                    return radio.getAttribute('aria-label') || '';
-                })()
-            });
-        }
-        for (const select of document.querySelectorAll('select')) {
-            results.push({
-                type: 'select',
-                name: select.name || '',
-                id: select.id || '',
-                label: (select.labels && select.labels.length > 0)
-                    ? select.labels[0].innerText.trim() : '',
-                options: Array.from(select.options).map(o => ({
-                    value: o.value, text: o.textContent.trim()
-                }))
-            });
-        }
-        for (const cb of document.querySelectorAll('input[type="checkbox"]')) {
-            results.push({
-                type: 'checkbox',
-                name: cb.name || '',
-                value: cb.value || '',
-                id: cb.id || '',
-                label: (cb.labels && cb.labels.length > 0)
-                    ? cb.labels[0].innerText.trim() : ''
-            });
-        }
-        return results;
-    }""")
-    logger.info("Re-extracted %d form elements after reload", len(form_data))
-
-    button_data = await page.evaluate("""() => {
-        const results = [];
-        for (const btn of document.querySelectorAll(
-            'button, input[type="submit"], a.btn, [role="button"]'
-        )) {
-            const text = btn.innerText?.trim() || btn.value || '';
-            if (!text) continue;
-            results.push({
-                tag: btn.tagName.toLowerCase(),
-                text,
-                id: btn.id || '',
-                type: btn.type || '',
-                classes: btn.className || ''
-            });
-        }
-        return results;
-    }""")
-
-    if not form_data:
-        raise RuntimeError("No form elements found after page reload — session may have expired")
 
     # Execute each action using element indices
     voted = 0
@@ -449,6 +382,7 @@ async def cast_votes(page: Page, decisions: list[VotingDecision]) -> str:
                 element_index,
                 action_type,
                 element_info.get("name"),
+                exc_info=True,
             )
 
     logger.info("Executed votes for %d/%d proposals", voted, len(decisions))
@@ -481,7 +415,7 @@ async def cast_votes(page: Page, decisions: list[VotingDecision]) -> str:
     confirmation = await page.evaluate("() => document.body.innerText")
     logger.info("Post-submission page preview: %.200s", confirmation)
 
-    return confirmation[:1000]
+    return confirmation[:1000], usage
 
 
 def _css_escape(s: str) -> str:

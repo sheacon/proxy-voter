@@ -6,7 +6,7 @@ from fastapi import APIRouter, Header, Request, Response
 
 from proxy_voter.config import get_settings
 from proxy_voter.email_parser import parse_email, validate_sender
-from proxy_voter.models import EmailType, SessionStatus, VotingDecision
+from proxy_voter.models import EmailType, SessionStatus, UsageStats, VotingDecision
 from proxy_voter.notifier import (
     send_confirmation_email,
     send_error_email,
@@ -50,7 +50,7 @@ async def receive_email(
 async def _process_email(raw_bytes: bytes) -> None:
     parsed = None
     try:
-        parsed = await parse_email(raw_bytes)
+        parsed, parse_usage = await parse_email(raw_bytes)
         logger.info(
             "Parsed email: type=%s sender=%s",
             parsed.email_type,
@@ -67,7 +67,7 @@ async def _process_email(raw_bytes: bytes) -> None:
             return
 
         if parsed.email_type == EmailType.NEW_FORWARD:
-            await _handle_new_forward(parsed)
+            await _handle_new_forward(parsed, parse_usage)
         elif parsed.email_type == EmailType.APPROVAL_REPLY:
             await _handle_approval_reply(parsed)
 
@@ -85,7 +85,10 @@ async def _process_email(raw_bytes: bytes) -> None:
                 logger.exception("Failed to send error email")
 
 
-async def _handle_new_forward(parsed) -> None:
+async def _handle_new_forward(parsed, parse_usage: UsageStats) -> None:
+    usage = UsageStats()
+    usage.merge(parse_usage)
+
     if not parsed.voting_url:
         send_error_email(
             parsed.sender_email,
@@ -107,7 +110,8 @@ async def _handle_new_forward(parsed) -> None:
             return
 
         logger.info("Researching proposals...")
-        metadata, decisions = await research_proposals(session.ballot)
+        metadata, decisions, research_usage = await research_proposals(session.ballot)
+        usage.merge(research_usage)
         company_name = metadata.get("company_name", parsed.company_name or "Unknown")
 
         logger.info("Research complete: %s — %d decisions", company_name, len(decisions))
@@ -122,7 +126,8 @@ async def _handle_new_forward(parsed) -> None:
             except Exception:
                 logger.warning("Timed out waiting for page reload")
             await session.page.wait_for_timeout(2000)
-            await cast_votes(session.page, decisions)
+            _, voter_usage = await cast_votes(session.page, decisions)
+            usage.merge(voter_usage)
 
             session_id = await create_session(
                 sender_email=parsed.sender_email,
@@ -134,7 +139,8 @@ async def _handle_new_forward(parsed) -> None:
             )
             await update_session_status(session_id, SessionStatus.VOTES_SUBMITTED)
 
-            send_confirmation_email(parsed.sender_email, session_id, metadata, decisions)
+            _log_total_usage(usage)
+            send_confirmation_email(parsed.sender_email, session_id, metadata, decisions, usage)
         else:
             session_id = await create_session(
                 sender_email=parsed.sender_email,
@@ -145,13 +151,16 @@ async def _handle_new_forward(parsed) -> None:
                 metadata=metadata,
             )
 
-            send_recommendations_email(parsed.sender_email, session_id, metadata, decisions)
+            _log_total_usage(usage)
+            send_recommendations_email(parsed.sender_email, session_id, metadata, decisions, usage)
             logger.info("Sent recommendations for session %s, awaiting approval", session_id)
     finally:
         await session.close()
 
 
 async def _handle_approval_reply(parsed) -> None:
+    usage = UsageStats()
+
     if not parsed.session_id:
         send_error_email(
             parsed.sender_email,
@@ -194,9 +203,21 @@ async def _handle_approval_reply(parsed) -> None:
     ballot_session = await open_ballot(db_session["voting_url"])
 
     try:
-        await cast_votes(ballot_session.page, decisions)
+        _, voter_usage = await cast_votes(ballot_session.page, decisions)
+        usage.merge(voter_usage)
         await update_session_status(parsed.session_id, SessionStatus.VOTES_SUBMITTED)
-        send_confirmation_email(parsed.sender_email, parsed.session_id, metadata, decisions)
+
+        _log_total_usage(usage)
+        send_confirmation_email(parsed.sender_email, parsed.session_id, metadata, decisions, usage)
         logger.info("Votes submitted for session %s", parsed.session_id)
     finally:
         await ballot_session.close()
+
+
+def _log_total_usage(usage: UsageStats) -> None:
+    logger.info(
+        "Pipeline total: %d input tokens, %d output tokens, est. cost $%.4f",
+        usage.total_input_tokens,
+        usage.total_output_tokens,
+        usage.estimated_cost,
+    )
