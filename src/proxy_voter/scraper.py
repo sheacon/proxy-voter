@@ -1,3 +1,4 @@
+import asyncio
 import logging
 from dataclasses import dataclass
 
@@ -6,6 +7,11 @@ from playwright.async_api import Browser, Page, Playwright, async_playwright
 from proxy_voter.models import BallotData
 
 logger = logging.getLogger(__name__)
+
+_BROWSER_ARGS = [
+    "--disable-blink-features=AutomationControlled",
+    "--no-sandbox",
+]
 
 
 @dataclass
@@ -29,17 +35,37 @@ async def open_ballot(voting_url: str) -> BallotSession:
     Caller must call session.close() when done.
     """
     pw = await async_playwright().start()
-    browser = await pw.chromium.launch(headless=True)
+    browser = await pw.chromium.launch(headless=True, args=_BROWSER_ARGS)
     context = await browser.new_context(
         user_agent=(
             "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
             "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
-        )
+        ),
+        viewport={"width": 1920, "height": 1080},
     )
     page = await context.new_page()
 
+    # Hide webdriver flag that bot detectors check
+    await page.add_init_script(
+        "Object.defineProperty(navigator, 'webdriver', {get: () => undefined})"
+    )
+
     logger.info("Navigating to voting page: %s", voting_url[:80])
-    await page.goto(voting_url, wait_until="domcontentloaded", timeout=60000)
+
+    # Retry navigation — voting sites can be slow or flaky
+    last_error = None
+    for attempt in range(3):
+        try:
+            await page.goto(voting_url, wait_until="domcontentloaded", timeout=60000)
+            last_error = None
+            break
+        except Exception as exc:
+            last_error = exc
+            logger.warning("Navigation attempt %d/3 failed: %s", attempt + 1, str(exc)[:120])
+            if attempt < 2:
+                await asyncio.sleep(5 * (attempt + 1))
+    if last_error:
+        raise last_error
 
     # Wait for page to fully load (works for SPAs and static pages)
     try:

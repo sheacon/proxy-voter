@@ -7,6 +7,7 @@ def _mock_playwright_chain():
     """Build a full mock playwright -> browser -> context -> page chain."""
     page = MagicMock()
     page.goto = AsyncMock()
+    page.add_init_script = AsyncMock()
     page.wait_for_load_state = AsyncMock()
     page.wait_for_timeout = AsyncMock()
     page.url = "https://central.proxyvote.com/ballot"
