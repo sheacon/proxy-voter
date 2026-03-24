@@ -132,17 +132,17 @@ VOTING_DECISIONS_TOOL = {
 
 # Patterns to strip from ballot page text (case-insensitive)
 _BOILERPLATE_PATTERNS = [
-    r"(?i)^.*cookie\s*(policy|preferences|settings|consent).*$",
-    r"(?i)^.*privacy\s*(policy|notice|statement).*$",
-    r"(?i)^.*terms\s*(of\s*use|of\s*service|&\s*conditions).*$",
-    r"(?i)^.*copyright\s*©?\s*\d{4}.*$",
-    r"(?i)^.*all\s*rights\s*reserved.*$",
-    r"(?i)^.*powered\s*by\s+.*$",
-    r"(?i)^accept(\s+all)?\s*$",
-    r"(?i)^reject(\s+all)?\s*$",
-    r"(?i)^(manage|customize)\s*cookies?\s*$",
+    r"^.*cookie\s*(policy|preferences|settings|consent).*$",
+    r"^.*privacy\s*(policy|notice|statement).*$",
+    r"^.*terms\s*(of\s*use|of\s*service|&\s*conditions).*$",
+    r"^.*copyright\s*©?\s*\d{4}.*$",
+    r"^.*all\s*rights\s*reserved.*$",
+    r"^.*powered\s*by\s+.*$",
+    r"^accept(\s+all)?\s*$",
+    r"^reject(\s+all)?\s*$",
+    r"^(manage|customize)\s*cookies?\s*$",
 ]
-_BOILERPLATE_RE = re.compile("|".join(_BOILERPLATE_PATTERNS), re.MULTILINE)
+_BOILERPLATE_RE = re.compile("|".join(_BOILERPLATE_PATTERNS), re.MULTILINE | re.IGNORECASE)
 _SEPARATOR_RE = re.compile(r"^[\s\-=*_]{4,}$", re.MULTILINE)
 _BLANK_LINES_RE = re.compile(r"\n{3,}")
 _BARE_URL_RE = re.compile(r"^https?://\S+$", re.MULTILINE)
