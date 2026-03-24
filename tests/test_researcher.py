@@ -238,18 +238,18 @@ def _make_response(
 
 class TestCreateWithRetry:
     async def test_success_first_attempt(self):
-        from proxy_voter.researcher import _create_with_retry
+        from proxy_voter.api_client import create_with_retry
 
         client = MagicMock()
         expected = _make_response()
         client.messages.create.return_value = expected
 
-        result = await _create_with_retry(client, model="test", messages=[])
+        result = await create_with_retry(client, model="test", messages=[])
         assert result is expected
         assert client.messages.create.call_count == 1
 
     async def test_retries_on_rate_limit(self):
-        from proxy_voter.researcher import _create_with_retry
+        from proxy_voter.api_client import create_with_retry
 
         client = MagicMock()
         expected = _make_response()
@@ -262,14 +262,14 @@ class TestCreateWithRetry:
             expected,
         ]
 
-        with patch("proxy_voter.researcher.asyncio.sleep", new_callable=AsyncMock):
-            result = await _create_with_retry(client, model="test", messages=[])
+        with patch("proxy_voter.api_client.asyncio.sleep", new_callable=AsyncMock):
+            result = await create_with_retry(client, model="test", messages=[])
 
         assert result is expected
         assert client.messages.create.call_count == 2
 
     async def test_exhausts_retries(self):
-        from proxy_voter.researcher import _create_with_retry
+        from proxy_voter.api_client import create_with_retry
 
         client = MagicMock()
         rate_err = anthropic.RateLimitError(
@@ -279,9 +279,9 @@ class TestCreateWithRetry:
         )
         client.messages.create.side_effect = rate_err
 
-        with patch("proxy_voter.researcher.asyncio.sleep", new_callable=AsyncMock):
+        with patch("proxy_voter.api_client.asyncio.sleep", new_callable=AsyncMock):
             with pytest.raises(anthropic.RateLimitError):
-                await _create_with_retry(client, model="test", messages=[])
+                await create_with_retry(client, model="test", messages=[])
 
         assert client.messages.create.call_count == 5
 

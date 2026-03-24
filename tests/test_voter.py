@@ -204,7 +204,13 @@ def _mock_page(form_data: list[dict] | None = None, button_data: list[dict] | No
         ]
 
     page = MagicMock()
-    page.evaluate = AsyncMock(side_effect=[form_data, button_data, "Page text...", "Confirmation"])
+    # evaluate calls: combined extraction (dict), then confirmation text
+    page.evaluate = AsyncMock(
+        side_effect=[
+            {"formElements": form_data, "buttons": button_data, "pageText": "Page text..."},
+            "Confirmation",
+        ]
+    )
     page.wait_for_timeout = AsyncMock()
     page.wait_for_load_state = AsyncMock()
 
@@ -253,7 +259,7 @@ class TestCastVotes:
         resp = _mock_claude_response(actions=[])
 
         with patch(
-            "proxy_voter.voter._create_with_retry",
+            "proxy_voter.voter.create_with_retry",
             new_callable=AsyncMock,
             return_value=resp,
         ):
@@ -274,7 +280,7 @@ class TestCastVotes:
         )
 
         with patch(
-            "proxy_voter.voter._create_with_retry",
+            "proxy_voter.voter.create_with_retry",
             new_callable=AsyncMock,
             return_value=resp,
         ):
@@ -295,7 +301,7 @@ class TestCastVotes:
         )
 
         with patch(
-            "proxy_voter.voter._create_with_retry",
+            "proxy_voter.voter.create_with_retry",
             new_callable=AsyncMock,
             return_value=resp,
         ):
@@ -318,7 +324,7 @@ class TestCastVotes:
         )
 
         with patch(
-            "proxy_voter.voter._create_with_retry",
+            "proxy_voter.voter.create_with_retry",
             new_callable=AsyncMock,
             return_value=resp,
         ):
@@ -344,7 +350,7 @@ class TestCastVotes:
 
         with (
             patch(
-                "proxy_voter.voter._create_with_retry",
+                "proxy_voter.voter.create_with_retry",
                 new_callable=AsyncMock,
                 return_value=resp,
             ),
@@ -372,7 +378,12 @@ class TestCastVotes:
         ]
 
         page = MagicMock()
-        page.evaluate = AsyncMock(side_effect=[form_data, button_data, "Page text", "Confirmation"])
+        page.evaluate = AsyncMock(
+            side_effect=[
+                {"formElements": form_data, "buttons": button_data, "pageText": "Page text"},
+                "Confirmation",
+            ]
+        )
         page.wait_for_timeout = AsyncMock()
         page.wait_for_load_state = AsyncMock()
 
@@ -413,7 +424,7 @@ class TestCastVotes:
         )
 
         with patch(
-            "proxy_voter.voter._create_with_retry",
+            "proxy_voter.voter.create_with_retry",
             new_callable=AsyncMock,
             return_value=resp,
         ):

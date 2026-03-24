@@ -1,9 +1,9 @@
-import asyncio
 import logging
 import re
 
 import anthropic
 
+from proxy_voter.api_client import create_with_retry
 from proxy_voter.config import get_settings
 from proxy_voter.models import BallotData, UsageStats, VotingDecision
 
@@ -212,7 +212,7 @@ like requests for printed materials, attendance preferences, etc."""
         VOTING_DECISIONS_TOOL,
     ]
 
-    response = await _create_with_retry(
+    response = await create_with_retry(
         client,
         model=settings.claude_model,
         system=system,
@@ -242,7 +242,7 @@ like requests for printed materials, attendance preferences, etc."""
             break
 
         # Web search is server-side — continue the conversation
-        response = await _create_with_retry(
+        response = await create_with_retry(
             client,
             model=settings.claude_model,
             system=system,
@@ -275,28 +275,6 @@ def _format_usage(usage: object) -> str:
     if cache_write:
         parts.append(f"cache_write={cache_write}")
     return ", ".join(parts)
-
-
-async def _create_with_retry(client, **kwargs) -> anthropic.types.Message:
-    """Call messages.create with retry on rate limit errors."""
-    max_retries = 5
-    for attempt in range(max_retries):
-        try:
-            return client.messages.create(
-                max_tokens=4096,
-                **kwargs,
-            )
-        except anthropic.RateLimitError:
-            if attempt == max_retries - 1:
-                raise
-            wait = 30 * (attempt + 1)
-            logger.warning(
-                "Rate limited, retrying in %ds (attempt %d/%d)",
-                wait,
-                attempt + 1,
-                max_retries,
-            )
-            await asyncio.sleep(wait)
 
 
 def _parse_results(tool_input: dict) -> tuple[dict, list[VotingDecision]]:

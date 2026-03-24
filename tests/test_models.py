@@ -124,13 +124,13 @@ class TestUsageStats:
         u.add(
             "claude-sonnet-4-6",
             SimpleNamespace(
-                input_tokens=1000,
+                input_tokens=700,
                 output_tokens=500,
                 cache_read_input_tokens=200,
                 cache_creation_input_tokens=100,
             ),
         )
-        # non_cached_input = 1000 - 200 - 100 = 700
+        # input_tokens from API = non-cached input (billed separately from cache)
         # cost = 700*3/1M + 500*15/1M + 100*3.75/1M + 200*0.30/1M
         expected = (700 * 3.0 + 500 * 15.0 + 100 * 3.75 + 200 * 0.30) / 1_000_000
         assert abs(u.estimated_cost - expected) < 1e-10

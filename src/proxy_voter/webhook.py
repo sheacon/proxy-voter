@@ -178,15 +178,15 @@ async def _handle_approval_reply(parsed) -> None:
         )
         return
 
-    status = db_session["status"]
-    if status == SessionStatus.VOTES_SUBMITTED.value:
+    status = SessionStatus(db_session["status"])
+    if status == SessionStatus.VOTES_SUBMITTED:
         send_error_email(
             parsed.sender_email,
             f"Votes for session {parsed.session_id} have already been submitted.",
         )
         return
 
-    if status == SessionStatus.EXPIRED.value:
+    if status == SessionStatus.EXPIRED:
         send_error_email(
             parsed.sender_email,
             f"Session {parsed.session_id} has expired. The voting deadline may have passed.",

@@ -66,13 +66,15 @@ class UsageStats:
 
     @property
     def estimated_cost(self) -> float:
-        """Calculate estimated cost in USD based on per-model pricing."""
+        """Calculate estimated cost in USD based on per-model pricing.
+
+        Anthropic's API returns input_tokens as non-cached input only,
+        so each token category is billed independently at its own rate.
+        """
         total = 0.0
         for c in self.calls:
             pricing = _MODEL_PRICING.get(c.model, _DEFAULT_PRICING)
-            # Input tokens exclude cached tokens (they're billed separately)
-            non_cached_input = c.input_tokens - c.cache_read_tokens - c.cache_creation_tokens
-            total += non_cached_input * pricing["input"] / 1_000_000
+            total += c.input_tokens * pricing["input"] / 1_000_000
             total += c.output_tokens * pricing["output"] / 1_000_000
             total += c.cache_creation_tokens * pricing["cache_write"] / 1_000_000
             total += c.cache_read_tokens * pricing["cache_read"] / 1_000_000

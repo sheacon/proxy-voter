@@ -1,9 +1,9 @@
-import asyncio
 import logging
 
 import anthropic
 from playwright.async_api import Page
 
+from proxy_voter.api_client import create_with_retry
 from proxy_voter.config import get_settings
 from proxy_voter.models import UsageStats, VotingDecision
 
@@ -139,9 +139,9 @@ async def cast_votes(page: Page, decisions: list[VotingDecision]) -> tuple[str, 
     # Dismiss any session modal before interacting with the page
     await _dismiss_session_modal(page)
 
-    # Extract all form elements from the page
-    form_data = await page.evaluate("""() => {
-        const results = [];
+    # Extract form elements, buttons, and page text in a single evaluate call
+    page_data = await page.evaluate("""() => {
+        const formElements = [];
 
         // Radio buttons
         for (const radio of document.querySelectorAll('input[type="radio"]')) {
@@ -158,15 +158,15 @@ async def cast_votes(page: Page, decisions: list[VotingDecision]) -> tuple[str, 
             }
             if (!label && radio.parentElement) {
                 const parent = radio.parentElement;
-                for (const child of parent.childNodes) {
-                    if (child.nodeType === 3 && child.textContent.trim()) {
-                        label = child.textContent.trim();
-                        break;
-                    }
-                    if (child.nodeType === 1 && child !== radio) {
-                        const t = child.innerText?.trim();
-                        if (t && t.length < 20) {
-                            label = t;
+                const sibling = radio.nextElementSibling;
+                if (sibling) {
+                    const t = sibling.innerText?.trim();
+                    if (t && t.length < 30) label = t;
+                }
+                if (!label) {
+                    for (const child of parent.childNodes) {
+                        if (child.nodeType === 3 && child.textContent.trim()) {
+                            label = child.textContent.trim();
                             break;
                         }
                     }
@@ -177,7 +177,7 @@ async def cast_votes(page: Page, decisions: list[VotingDecision]) -> tuple[str, 
                 if (lbl) label = lbl.innerText.trim();
             }
 
-            results.push({ type: 'radio', name, value, id, label });
+            formElements.push({ type: 'radio', name, value, id, label });
         }
 
         // Select dropdowns
@@ -196,7 +196,7 @@ async def cast_votes(page: Page, decisions: list[VotingDecision]) -> tuple[str, 
                 const lbl = document.querySelector('label[for="' + CSS.escape(id) + '"]');
                 if (lbl) label = lbl.innerText.trim();
             }
-            results.push({ type: 'select', name, id, label, options });
+            formElements.push({ type: 'select', name, id, label, options });
         }
 
         // Checkboxes
@@ -212,29 +212,33 @@ async def cast_votes(page: Page, decisions: list[VotingDecision]) -> tuple[str, 
                 const lbl = document.querySelector('label[for="' + CSS.escape(id) + '"]');
                 if (lbl) label = lbl.innerText.trim();
             }
-            results.push({ type: 'checkbox', name, value, id, label });
+            formElements.push({ type: 'checkbox', name, value, id, label });
         }
 
-        return results;
-    }""")
-
-    # Extract button/submit element candidates
-    button_data = await page.evaluate("""() => {
-        const results = [];
-        const buttons = document.querySelectorAll(
+        // Buttons
+        const buttons = [];
+        for (const btn of document.querySelectorAll(
             'button, input[type="submit"], a.btn, [role="button"]'
-        );
-        for (const btn of buttons) {
+        )) {
             const text = btn.innerText?.trim() || btn.value || '';
             if (!text) continue;
-            const tag = btn.tagName.toLowerCase();
-            const id = btn.id || '';
-            const type = btn.type || '';
-            const classes = btn.className || '';
-            results.push({ tag, text, id, type, classes });
+            buttons.push({
+                tag: btn.tagName.toLowerCase(),
+                text, id: btn.id || '', type: btn.type || '',
+                classes: btn.className || ''
+            });
         }
-        return results;
+
+        return {
+            formElements,
+            buttons,
+            pageText: document.body.innerText
+        };
     }""")
+
+    form_data = page_data["formElements"]
+    button_data = page_data["buttons"]
+    page_text = page_data["pageText"]
 
     logger.info("Found %d form elements and %d buttons on ballot", len(form_data), len(button_data))
 
@@ -273,8 +277,6 @@ async def cast_votes(page: Page, decisions: list[VotingDecision]) -> tuple[str, 
         f'  [{i}] {b["tag"]} text="{b["text"]}" id="{b["id"]}"' for i, b in enumerate(button_data)
     )
 
-    # Get page text for context (truncated)
-    page_text = await page.evaluate("() => document.body.innerText")
     page_text_truncated = page_text[:3000]
 
     decisions_text = "\n".join(
@@ -286,7 +288,7 @@ async def cast_votes(page: Page, decisions: list[VotingDecision]) -> tuple[str, 
     client = anthropic.Anthropic(api_key=settings.anthropic_api_key)
     usage = UsageStats()
 
-    response = await _create_with_retry(
+    response = await create_with_retry(
         client,
         model=settings.claude_voter_model,
         messages=[
@@ -475,25 +477,3 @@ async def _click_submit_fallback(page: Page) -> None:
         except Exception:
             continue
     raise RuntimeError("Submit button not found")
-
-
-async def _create_with_retry(client, **kwargs) -> anthropic.types.Message:
-    """Call messages.create with retry on rate limit errors."""
-    max_retries = 5
-    for attempt in range(max_retries):
-        try:
-            return client.messages.create(
-                max_tokens=4096,
-                **kwargs,
-            )
-        except anthropic.RateLimitError:
-            if attempt == max_retries - 1:
-                raise
-            wait = 30 * (attempt + 1)
-            logger.warning(
-                "Rate limited, retrying in %ds (attempt %d/%d)",
-                wait,
-                attempt + 1,
-                max_retries,
-            )
-            await asyncio.sleep(wait)
