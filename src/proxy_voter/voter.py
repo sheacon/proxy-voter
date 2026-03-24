@@ -318,8 +318,81 @@ async def cast_votes(page: Page, decisions: list[VotingDecision]) -> str:
 
     logger.info("Claude returned %d vote actions", len(actions))
 
-    # Dismiss modal again in case it appeared during the Claude API call
+    # The Claude API call may have taken minutes (rate limits). The page likely
+    # expired or navigated away during that time. Reload and re-extract form data
+    # so the element indices remain valid.
+    voting_url = page.url
+    logger.info("Reloading ballot page before executing votes: %s", voting_url[:80])
+    await page.reload(wait_until="domcontentloaded", timeout=60000)
+    try:
+        await page.wait_for_load_state("networkidle", timeout=30000)
+    except Exception:
+        logger.warning("Timed out waiting for page reload networkidle")
+    await page.wait_for_timeout(2000)
     await _dismiss_session_modal(page)
+
+    # Re-extract form data after reload so indices match the live page
+    form_data = await page.evaluate("""() => {
+        const results = [];
+        for (const radio of document.querySelectorAll('input[type="radio"]')) {
+            results.push({
+                type: 'radio',
+                name: radio.name || '',
+                value: radio.value || '',
+                id: radio.id || '',
+                label: (() => {
+                    if (radio.labels && radio.labels.length > 0)
+                        return radio.labels[0].innerText.trim();
+                    return radio.getAttribute('aria-label') || '';
+                })()
+            });
+        }
+        for (const select of document.querySelectorAll('select')) {
+            results.push({
+                type: 'select',
+                name: select.name || '',
+                id: select.id || '',
+                label: (select.labels && select.labels.length > 0)
+                    ? select.labels[0].innerText.trim() : '',
+                options: Array.from(select.options).map(o => ({
+                    value: o.value, text: o.textContent.trim()
+                }))
+            });
+        }
+        for (const cb of document.querySelectorAll('input[type="checkbox"]')) {
+            results.push({
+                type: 'checkbox',
+                name: cb.name || '',
+                value: cb.value || '',
+                id: cb.id || '',
+                label: (cb.labels && cb.labels.length > 0)
+                    ? cb.labels[0].innerText.trim() : ''
+            });
+        }
+        return results;
+    }""")
+    logger.info("Re-extracted %d form elements after reload", len(form_data))
+
+    button_data = await page.evaluate("""() => {
+        const results = [];
+        for (const btn of document.querySelectorAll(
+            'button, input[type="submit"], a.btn, [role="button"]'
+        )) {
+            const text = btn.innerText?.trim() || btn.value || '';
+            if (!text) continue;
+            results.push({
+                tag: btn.tagName.toLowerCase(),
+                text,
+                id: btn.id || '',
+                type: btn.type || '',
+                classes: btn.className || ''
+            });
+        }
+        return results;
+    }""")
+
+    if not form_data:
+        raise RuntimeError("No form elements found after page reload — session may have expired")
 
     # Execute each action using element indices
     voted = 0
