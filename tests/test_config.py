@@ -6,7 +6,6 @@ class TestSettings:
     def test_defaults(self):
         s = get_settings()
         assert s.claude_model == "claude-sonnet-4-6"
-        assert s.claude_voter_model == "claude-haiku-4-5"
         assert s.database_path == "test_data/proxy_voter.db"  # from conftest env
         assert s.policy_preferences_path == "policy-preferences.md"
 

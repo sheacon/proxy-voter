@@ -290,7 +290,7 @@ async def cast_votes(page: Page, decisions: list[VotingDecision]) -> tuple[str, 
 
     response = await create_with_retry(
         client,
-        model=settings.claude_voter_model,
+        model=settings.claude_model,
         messages=[
             {
                 "role": "user",
@@ -305,7 +305,7 @@ async def cast_votes(page: Page, decisions: list[VotingDecision]) -> tuple[str, 
         tools=[VOTE_ACTION_TOOL],
         tool_choice={"type": "tool", "name": "submit_vote_actions"},
     )
-    usage.add(settings.claude_voter_model, response.usage)
+    usage.add(settings.claude_model, response.usage)
     logger.info(
         "Voter API usage: in=%d, out=%d",
         response.usage.input_tokens,
