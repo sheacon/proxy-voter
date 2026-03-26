@@ -13,7 +13,12 @@ from proxy_voter.models import (
     UsageStats,
     VotingDecision,
 )
-from proxy_voter.webhook import _handle_approval_reply, _handle_new_forward, _log_total_usage
+from proxy_voter.webhook import (
+    _handle_approval_reply,
+    _handle_new_forward,
+    _log_total_usage,
+    _StageError,
+)
 
 
 def _make_parsed_email(**kwargs) -> ParsedEmail:
@@ -231,11 +236,31 @@ class TestHandleNewForward:
                 new_callable=AsyncMock,
                 side_effect=RuntimeError("API error"),
             ),
-            pytest.raises(RuntimeError),
+            pytest.raises(_StageError, match="proposal research"),
         ):
             await _handle_new_forward(parsed, UsageStats())
 
         session.close.assert_awaited_once()
+
+    async def test_stage_error_has_context(self):
+        parsed = _make_parsed_email()
+        session = _make_ballot_session()
+
+        with (
+            patch("proxy_voter.webhook.open_ballot", new_callable=AsyncMock, return_value=session),
+            patch(
+                "proxy_voter.webhook.research_proposals",
+                new_callable=AsyncMock,
+                side_effect=RuntimeError("API error"),
+            ),
+            pytest.raises(_StageError) as exc_info,
+        ):
+            await _handle_new_forward(parsed, UsageStats())
+
+        assert exc_info.value.stage == "proposal research"
+        assert exc_info.value.company_name == "TEST CORP"
+        assert exc_info.value.voting_url == "https://www.proxyvote.com/test"
+        assert isinstance(exc_info.value.__cause__, RuntimeError)
 
 
 # ---------------------------------------------------------------------------
@@ -352,7 +377,7 @@ class TestHandleApprovalReply:
                 new_callable=AsyncMock,
                 side_effect=RuntimeError("Vote failed"),
             ),
-            pytest.raises(RuntimeError),
+            pytest.raises(_StageError, match="vote casting"),
         ):
             await _handle_approval_reply(parsed)
 

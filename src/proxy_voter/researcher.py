@@ -276,6 +276,16 @@ def _parse_results(tool_input: dict) -> tuple[dict, list[VotingDecision]]:
         "cusip": tool_input.get("cusip", ""),
     }
 
+    if "decisions" not in tool_input:
+        logger.error(
+            "Research agent tool response missing 'decisions' key. Keys received: %s",
+            list(tool_input.keys()),
+        )
+        raise ValueError(
+            f"Research agent returned malformed response (missing 'decisions' key, "
+            f"got keys: {list(tool_input.keys())})"
+        )
+
     decisions = []
     for d in tool_input["decisions"]:
         decisions.append(

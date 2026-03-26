@@ -67,9 +67,57 @@ def send_confirmation_email(
     logger.info("Sent confirmation email to %s for session %s", to_email, session_id)
 
 
-def send_error_email(to_email: str, error_message: str, context: str = "") -> None:
+def send_error_email(
+    to_email: str,
+    error_message: str,
+    context: str = "",
+    *,
+    session_id: str = "",
+    company_name: str = "",
+    stage: str = "",
+    voting_url: str = "",
+    error_type: str = "",
+) -> None:
     _init_resend()
     settings = get_settings()
+
+    # Build subject with company/session context when available
+    subject_parts = ["Proxy Vote Error"]
+    if company_name:
+        subject_parts.append(company_name)
+    if session_id:
+        subject_parts = [f"[{session_id}]"] + subject_parts
+    subject = " — ".join(subject_parts) if company_name else " ".join(subject_parts)
+
+    # Build diagnostic details section
+    details_rows = ""
+    if session_id:
+        details_rows += (
+            f"<tr><td><strong>Session</strong></td><td><code>{session_id}</code></td></tr>"
+        )
+    if company_name:
+        details_rows += f"<tr><td><strong>Company</strong></td><td>{company_name}</td></tr>"
+    if stage:
+        details_rows += f"<tr><td><strong>Failed at</strong></td><td>{stage}</td></tr>"
+    if error_type:
+        details_rows += (
+            f"<tr><td><strong>Error type</strong></td><td><code>{error_type}</code></td></tr>"
+        )
+
+    details_html = ""
+    if details_rows:
+        details_html = f"""
+        <table style="width: auto; margin: 16px 0; font-size: 14px;">
+            {details_rows}
+        </table>"""
+
+    voting_url_html = ""
+    if voting_url:
+        voting_url_html = (
+            f'<p style="margin-top: 16px;"><strong>Vote manually:</strong> '
+            f'<a href="{voting_url}">'
+            f"{voting_url[:80]}{'...' if len(voting_url) > 80 else ''}</a></p>"
+        )
 
     html = f"""<!DOCTYPE html>
 <html>
@@ -78,10 +126,13 @@ def send_error_email(to_email: str, error_message: str, context: str = "") -> No
 <div class="container">
     <div class="header" style="background-color: #dc3545;">
         <h1>Proxy Vote Error</h1>
+        {f'<div class="meta">{company_name}</div>' if company_name else ""}
     </div>
     <div class="content">
         <p>{error_message}</p>
         {f'<p style="color: #666; font-size: 14px;">{context}</p>' if context else ""}
+        {details_html}
+        {voting_url_html}
         <p>If this is unexpected, please try forwarding the email again or vote manually.</p>
     </div>
 </div>
@@ -92,7 +143,7 @@ def send_error_email(to_email: str, error_message: str, context: str = "") -> No
         {
             "from": f"Proxy Voter <{settings.from_email}>",
             "to": [to_email],
-            "subject": "Proxy Vote Error",
+            "subject": subject,
             "html": html,
         }
     )

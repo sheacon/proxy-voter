@@ -25,6 +25,24 @@ router = APIRouter()
 _lock = asyncio.Lock()
 
 
+class _StageError(Exception):
+    """Wraps an exception with pipeline stage context for diagnostic error emails."""
+
+    def __init__(
+        self,
+        stage: str,
+        *,
+        company_name: str = "",
+        session_id: str = "",
+        voting_url: str = "",
+    ) -> None:
+        super().__init__(stage)
+        self.stage = stage
+        self.company_name = company_name
+        self.session_id = session_id
+        self.voting_url = voting_url
+
+
 @router.post("/webhook/email")
 async def receive_email(
     request: Request,
@@ -49,6 +67,10 @@ async def receive_email(
 
 async def _process_email(raw_bytes: bytes) -> None:
     parsed = None
+    stage = "email parsing"
+    company_name = ""
+    session_id = ""
+    voting_url = ""
     try:
         parsed, parse_usage = await parse_email(raw_bytes)
         logger.info(
@@ -56,6 +78,8 @@ async def _process_email(raw_bytes: bytes) -> None:
             parsed.email_type,
             parsed.sender_email,
         )
+        company_name = parsed.company_name or ""
+        voting_url = parsed.voting_url or ""
 
         if not validate_sender(parsed.sender_email):
             logger.warning("Rejected email from unapproved sender: %s", parsed.sender_email)
@@ -69,10 +93,32 @@ async def _process_email(raw_bytes: bytes) -> None:
         if parsed.email_type == EmailType.NEW_FORWARD:
             await _handle_new_forward(parsed, parse_usage)
         elif parsed.email_type == EmailType.APPROVAL_REPLY:
+            session_id = parsed.session_id or ""
             await _handle_approval_reply(parsed)
 
-    except Exception:
-        logger.exception("Error processing email")
+    except _StageError as exc:
+        logger.exception("Error processing email at stage: %s", exc.stage)
+        stage = exc.stage
+        company_name = exc.company_name or company_name
+        session_id = exc.session_id or session_id
+        voting_url = exc.voting_url or voting_url
+        if parsed and parsed.sender_email:
+            try:
+                send_error_email(
+                    parsed.sender_email,
+                    f"An error occurred during {exc.stage}.",
+                    "Please try forwarding the email again. If the problem persists, "
+                    "you may need to vote manually via the voting link in the original email.",
+                    session_id=session_id,
+                    company_name=company_name,
+                    stage=exc.stage,
+                    voting_url=voting_url,
+                    error_type=type(exc.__cause__).__name__ if exc.__cause__ else "",
+                )
+            except Exception:
+                logger.exception("Failed to send error email")
+    except Exception as exc:
+        logger.exception("Error processing email at stage: %s", stage)
         if parsed and parsed.sender_email:
             try:
                 send_error_email(
@@ -80,6 +126,11 @@ async def _process_email(raw_bytes: bytes) -> None:
                     "An unexpected error occurred while processing your proxy vote email.",
                     "Please try forwarding the email again. If the problem persists, "
                     "you may need to vote manually via the voting link in the original email.",
+                    session_id=session_id,
+                    company_name=company_name,
+                    stage=stage,
+                    voting_url=voting_url,
+                    error_type=type(exc).__name__,
                 )
             except Exception:
                 logger.exception("Failed to send error email")
@@ -88,6 +139,7 @@ async def _process_email(raw_bytes: bytes) -> None:
 async def _handle_new_forward(parsed, parse_usage: UsageStats) -> None:
     usage = UsageStats()
     usage.merge(parse_usage)
+    company_name = parsed.company_name or ""
 
     if not parsed.voting_url:
         send_error_email(
@@ -98,7 +150,14 @@ async def _handle_new_forward(parsed, parse_usage: UsageStats) -> None:
         return
 
     logger.info("Opening ballot from %s", parsed.voting_url[:80])
-    session = await open_ballot(parsed.voting_url)
+    try:
+        session = await open_ballot(parsed.voting_url)
+    except Exception as exc:
+        raise _StageError(
+            "ballot scraping",
+            company_name=company_name,
+            voting_url=parsed.voting_url,
+        ) from exc
 
     try:
         if not session.ballot.page_text.strip():
@@ -106,11 +165,20 @@ async def _handle_new_forward(parsed, parse_usage: UsageStats) -> None:
                 parsed.sender_email,
                 "The voting page appears to be empty. The link may have expired.",
                 f"Company: {parsed.company_name or 'Unknown'}",
+                company_name=company_name,
+                voting_url=parsed.voting_url,
             )
             return
 
         logger.info("Researching proposals...")
-        metadata, decisions, research_usage = await research_proposals(session.ballot)
+        try:
+            metadata, decisions, research_usage = await research_proposals(session.ballot)
+        except Exception as exc:
+            raise _StageError(
+                "proposal research",
+                company_name=company_name,
+                voting_url=parsed.voting_url,
+            ) from exc
         usage.merge(research_usage)
         company_name = metadata.get("company_name", parsed.company_name or "Unknown")
 
@@ -126,7 +194,14 @@ async def _handle_new_forward(parsed, parse_usage: UsageStats) -> None:
             except Exception:
                 logger.warning("Timed out waiting for page reload")
             await session.page.wait_for_timeout(2000)
-            _, voter_usage = await cast_votes(session.page, decisions)
+            try:
+                _, voter_usage = await cast_votes(session.page, decisions)
+            except Exception as exc:
+                raise _StageError(
+                    "vote casting",
+                    company_name=company_name,
+                    voting_url=parsed.voting_url,
+                ) from exc
             usage.merge(voter_usage)
 
             session_id = await create_session(
@@ -175,6 +250,7 @@ async def _handle_approval_reply(parsed) -> None:
             parsed.sender_email,
             f"Voting session {parsed.session_id} was not found.",
             "The session may have expired or been deleted.",
+            session_id=parsed.session_id,
         )
         return
 
@@ -183,6 +259,7 @@ async def _handle_approval_reply(parsed) -> None:
         send_error_email(
             parsed.sender_email,
             f"Votes for session {parsed.session_id} have already been submitted.",
+            session_id=parsed.session_id,
         )
         return
 
@@ -190,6 +267,7 @@ async def _handle_approval_reply(parsed) -> None:
         send_error_email(
             parsed.sender_email,
             f"Session {parsed.session_id} has expired. The voting deadline may have passed.",
+            session_id=parsed.session_id,
         )
         return
 
@@ -197,13 +275,31 @@ async def _handle_approval_reply(parsed) -> None:
         VotingDecision.model_validate(d) for d in json.loads(db_session["voting_decisions"])
     ]
     metadata = json.loads(db_session["metadata"])
+    company_name = metadata.get("company_name", "")
+    voting_url = db_session["voting_url"]
 
     # Open a fresh browser session to the ballot page for voting
     logger.info("Approval received for session %s, opening ballot to cast votes", parsed.session_id)
-    ballot_session = await open_ballot(db_session["voting_url"])
+    try:
+        ballot_session = await open_ballot(voting_url)
+    except Exception as exc:
+        raise _StageError(
+            "ballot scraping (approval)",
+            company_name=company_name,
+            session_id=parsed.session_id,
+            voting_url=voting_url,
+        ) from exc
 
     try:
-        _, voter_usage = await cast_votes(ballot_session.page, decisions)
+        try:
+            _, voter_usage = await cast_votes(ballot_session.page, decisions)
+        except Exception as exc:
+            raise _StageError(
+                "vote casting",
+                company_name=company_name,
+                session_id=parsed.session_id,
+                voting_url=voting_url,
+            ) from exc
         usage.merge(voter_usage)
         await update_session_status(parsed.session_id, SessionStatus.VOTES_SUBMITTED)
 

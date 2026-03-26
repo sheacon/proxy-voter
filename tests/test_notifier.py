@@ -239,3 +239,44 @@ class TestSendErrorEmail:
         html = mock_send.call_args[0][0]["html"]
         # No extra context paragraph
         assert "Extra context" not in html
+
+    @patch("proxy_voter.notifier.resend.Emails.send")
+    def test_with_diagnostic_info(self, mock_send):
+        send_error_email(
+            "user@example.com",
+            "Research failed",
+            session_id="PV-abc123",
+            company_name="ACME Corp",
+            stage="proposal research",
+            voting_url="https://www.proxyvote.com/test",
+            error_type="ValueError",
+        )
+        call_args = mock_send.call_args[0][0]
+        assert "[PV-abc123]" in call_args["subject"]
+        assert "ACME Corp" in call_args["subject"]
+        html = call_args["html"]
+        assert "PV-abc123" in html
+        assert "ACME Corp" in html
+        assert "proposal research" in html
+        assert "ValueError" in html
+        assert "https://www.proxyvote.com/test" in html
+
+    @patch("proxy_voter.notifier.resend.Emails.send")
+    def test_subject_without_company(self, mock_send):
+        send_error_email(
+            "user@example.com",
+            "Error",
+            session_id="PV-abc123",
+        )
+        subject = mock_send.call_args[0][0]["subject"]
+        assert subject == "[PV-abc123] Proxy Vote Error"
+
+    @patch("proxy_voter.notifier.resend.Emails.send")
+    def test_subject_with_company_no_session(self, mock_send):
+        send_error_email(
+            "user@example.com",
+            "Error",
+            company_name="ACME Corp",
+        )
+        subject = mock_send.call_args[0][0]["subject"]
+        assert "ACME Corp" in subject
