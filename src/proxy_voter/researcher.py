@@ -204,6 +204,7 @@ requests for printed materials, attendance preferences, etc."""
     response = await create_with_retry(
         client,
         model=settings.claude_model,
+        max_tokens=16384,
         system=system,
         tools=tools,
         messages=[{"role": "user", "content": user_message}],
@@ -219,6 +220,9 @@ requests for printed materials, attendance preferences, etc."""
 
     max_turns = 8
     for turn in range(max_turns):
+        if response.stop_reason == "max_tokens":
+            logger.warning("Research response truncated by max_tokens (turn %d)", turn + 1)
+
         # Check if the submit_voting_decisions tool was called
         for block in response.content:
             if block.type == "tool_use" and block.name == "submit_voting_decisions":
@@ -227,13 +231,14 @@ requests for printed materials, attendance preferences, etc."""
         if response.stop_reason == "end_turn":
             break
 
-        if response.stop_reason != "tool_use":
+        if response.stop_reason not in ("tool_use", "max_tokens"):
             break
 
-        # Web search is server-side — continue the conversation
+        # Web search is server-side, or truncated response — continue the conversation
         response = await create_with_retry(
             client,
             model=settings.claude_model,
+            max_tokens=16384,
             system=system,
             tools=tools,
             messages=messages,
