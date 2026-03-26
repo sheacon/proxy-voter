@@ -221,7 +221,7 @@ requests for printed materials, attendance preferences, etc."""
     max_turns = 8
     for turn in range(max_turns):
         if response.stop_reason == "max_tokens":
-            logger.warning("Research response truncated by max_tokens (turn %d)", turn + 1)
+            raise RuntimeError("Research response truncated by max_tokens — output too long")
 
         # Check if the submit_voting_decisions tool was called
         for block in response.content:
@@ -231,10 +231,10 @@ requests for printed materials, attendance preferences, etc."""
         if response.stop_reason == "end_turn":
             break
 
-        if response.stop_reason not in ("tool_use", "max_tokens"):
+        if response.stop_reason != "tool_use":
             break
 
-        # Web search is server-side, or truncated response — continue the conversation
+        # Web search is server-side — continue the conversation
         response = await create_with_retry(
             client,
             model=settings.claude_model,
