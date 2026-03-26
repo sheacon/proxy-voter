@@ -1,2 +1,3 @@
 - I am a shareholder and want to vote in a manner that benefits shareholders and the long-term value of the company over any other considerations.
 - I am generally opposed to management-backed compensation proposals
+- I prefer an independent board chairman — the CEO and board chair roles should be held by separate individuals
