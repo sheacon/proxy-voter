@@ -94,7 +94,8 @@ class ParsedEmail(BaseModel):
     voting_url: str | None = None
     company_name: str | None = None
     platform_name: str | None = None
-    auto_vote: bool = False
+    approve_mode: bool = False
+    explain: bool = False
     # Fields for approval replies
     session_id: str | None = None
 
@@ -109,8 +110,8 @@ class VotingDecision(BaseModel):
     proposal_number: str
     proposal_description: str
     vote: str  # "For", "Against", "Abstain", "Withhold", etc. — whatever the ballot offers
-    reasoning: str
-    policy_rationale: str
+    reasoning: str = ""
+    policy_rationale: str = ""
     board_recommendation: str
     aligned_with_board: bool
     # Derived from the ballot by Claude

@@ -7,6 +7,7 @@ os.environ.setdefault("ANTHROPIC_API_KEY", "test-key")
 os.environ.setdefault("RESEND_API_KEY", "test-key")
 os.environ.setdefault("WEBHOOK_SECRET", "test-secret")
 os.environ.setdefault("FROM_EMAIL", "proxy-voter@example.com")
+os.environ.setdefault("ADMIN_EMAIL", "admin@example.com")
 os.environ.setdefault("APPROVED_SENDERS", "user@example.com,user2@example.com")
 os.environ.setdefault("DATABASE_PATH", "test_data/proxy_voter.db")
 

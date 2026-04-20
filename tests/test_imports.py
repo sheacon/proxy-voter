@@ -37,11 +37,14 @@ def test_import_researcher():
         _BLANK_LINES_RE,
         _BOILERPLATE_RE,
         _SEPARATOR_RE,
-        VOTING_DECISIONS_TOOL,
+        _build_voting_decisions_tool,
     )
 
     for obj in (_BOILERPLATE_RE, _SEPARATOR_RE, _BLANK_LINES_RE, _BARE_URL_RE):
         assert isinstance(obj, re.Pattern)
+
+    assert isinstance(_build_voting_decisions_tool(False), dict)
+    assert isinstance(_build_voting_decisions_tool(True), dict)
 
 
 def test_import_voter():

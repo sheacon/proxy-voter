@@ -29,7 +29,7 @@ def _make_parsed_email(**kwargs) -> ParsedEmail:
         "voting_url": "https://www.proxyvote.com/test",
         "company_name": "TEST CORP",
         "platform_name": "ProxyVote.com",
-        "auto_vote": False,
+        "approve_mode": False,
     }
     defaults.update(kwargs)
     return ParsedEmail(**defaults)
@@ -135,8 +135,8 @@ class TestHandleNewForward:
         assert "empty" in mock_err.call_args[0][1].lower()
         session.close.assert_awaited_once()
 
-    async def test_recommendation_flow(self):
-        parsed = _make_parsed_email(auto_vote=False)
+    async def test_approve_mode_flow(self):
+        parsed = _make_parsed_email(approve_mode=True)
         session = _make_ballot_session()
 
         with (
@@ -156,11 +156,12 @@ class TestHandleNewForward:
             await _handle_new_forward(parsed, UsageStats())
 
         mock_send.assert_called_once()
+        assert mock_send.call_args[0][0] == "user@example.com"
         assert mock_send.call_args[0][1] == "PV-abc123"
         session.close.assert_awaited_once()
 
-    async def test_auto_vote_flow(self):
-        parsed = _make_parsed_email(auto_vote=True)
+    async def test_default_vote_flow(self):
+        parsed = _make_parsed_email(approve_mode=False)
         session = _make_ballot_session()
 
         with (
@@ -191,10 +192,12 @@ class TestHandleNewForward:
         mock_cast.assert_awaited_once()
         mock_update.assert_awaited_once_with("PV-abc123", SessionStatus.VOTES_SUBMITTED)
         mock_confirm.assert_called_once()
+        assert mock_confirm.call_args[0][0] == "admin@example.com"
+        assert mock_confirm.call_args.kwargs["original_sender"] == "user@example.com"
         session.close.assert_awaited_once()
 
-    async def test_auto_vote_reloads_page(self):
-        parsed = _make_parsed_email(auto_vote=True)
+    async def test_default_vote_reloads_page(self):
+        parsed = _make_parsed_email(approve_mode=False)
         session = _make_ballot_session()
 
         with (

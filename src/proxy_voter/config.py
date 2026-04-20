@@ -12,6 +12,7 @@ class Settings(BaseSettings):
     from_email: str
     claude_model: str = "claude-sonnet-4-6"
     database_path: str = "data/proxy_voter.db"
+    admin_email: str
     approved_senders: str = ""
     policy_preferences_path: str = "policy-preferences.md"
     test_ballot_url: str = ""

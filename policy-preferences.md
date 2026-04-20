@@ -1,3 +1,5 @@
 - Prioritize long-term shareholder value above all other considerations
 - Vote against executive compensation proposals unless they are clearly aligned with long-term shareholder value
-- Vote for separating the CEO and board chair roles into independent positions
+- When there is a proposal to disallow one individual from holding the CEO position and Board Chairman position simultaneously, vote in favor
+	- This does not mean always vote against reelection of a CEO who is already board chairman
+	- This does not mean to vote against the CEO in a non-chairman board seat

@@ -78,7 +78,7 @@ class TestParseDirectEmail:
         assert parsed.sender_email == "id@proxyvote.com"
         assert parsed.voting_url == "https://www.proxyvote.com/0abc"
         assert parsed.company_name == "UBS GROUP AG"
-        assert parsed.auto_vote is False
+        assert parsed.approve_mode is False
 
     async def test_parse_enbridge_email(self) -> None:
         raw = _load_eml("example-proxy-email-1.eml")
@@ -161,23 +161,23 @@ class TestParseForwardedEmail:
         assert parsed.voting_url is not None
         assert parsed.company_name == "UBS GROUP AG"
 
-    async def test_inline_forward_auto_vote(self) -> None:
-        raw = self._make_inline_forward(user_text="auto-vote")
+    async def test_inline_forward_approve_mode(self) -> None:
+        raw = self._make_inline_forward(user_text="approve-mode")
         with _mock_identify("https://www.proxyvote.com/0abc", "UBS GROUP AG", "ProxyVote.com"):
             parsed, _ = await parse_email(raw)
-        assert parsed.auto_vote is True
+        assert parsed.approve_mode is True
 
-    async def test_inline_forward_auto_vote_case_insensitive(self) -> None:
-        raw = self._make_inline_forward(user_text="Please Auto-Vote this one")
+    async def test_inline_forward_approve_mode_case_insensitive(self) -> None:
+        raw = self._make_inline_forward(user_text="Please Approve-Mode this one")
         with _mock_identify("https://www.proxyvote.com/0abc", "UBS GROUP AG", "ProxyVote.com"):
             parsed, _ = await parse_email(raw)
-        assert parsed.auto_vote is True
+        assert parsed.approve_mode is True
 
     async def test_inline_forward_no_flag(self) -> None:
         raw = self._make_inline_forward(user_text="Please handle this proxy vote")
         with _mock_identify("https://www.proxyvote.com/0abc", "UBS GROUP AG", "ProxyVote.com"):
             parsed, _ = await parse_email(raw)
-        assert parsed.auto_vote is False
+        assert parsed.approve_mode is False
 
     async def test_inline_forward_different_emails(self) -> None:
         cases = [

@@ -175,7 +175,7 @@ class TestPydanticModels:
             subject="Test",
         )
         assert p.voting_url is None
-        assert p.auto_vote is False
+        assert p.approve_mode is False
         assert p.session_id is None
         assert p.company_name is None
 

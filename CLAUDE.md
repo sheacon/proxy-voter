@@ -60,7 +60,7 @@ Proxy Voter is an automated proxy voting system for corporate shareholder ballot
 
 ### Two-phase voting
 
-By default, new forwards trigger a **recommendation email** — the user must reply with "approved" to cast votes. If the user includes `auto-vote` in their forwarded email body, votes are cast immediately and only a confirmation is sent.
+By default, new forwards trigger **immediate voting** and a confirmation email is sent to the admin (`ADMIN_EMAIL`). If the user includes `approve-mode` in their forwarded email body, the system sends a recommendation email to the sender instead, and votes are only cast after the sender replies with "approved". Confirmation and error emails always go to the admin, with the original sender identified in the email body.
 
 ### Key models
 

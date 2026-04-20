@@ -134,9 +134,10 @@ def _parse_new_forward(
         )
         usage.merge(call_usage)
 
-    # Detect auto-vote flag in the forwarder's own text
+    # Detect flags in the forwarder's own text
     outer_body = _get_text_body(msg)
-    auto_vote = bool(re.search(r"\bauto-vote\b", outer_body, re.IGNORECASE))
+    approve_mode = bool(re.search(r"\bapprove-mode\b", outer_body, re.IGNORECASE))
+    explain = bool(re.search(r"\bexplain\b", outer_body, re.IGNORECASE))
 
     if not voting_url:
         logger.warning("No voting URL found in email from %s", sender_email)
@@ -148,7 +149,8 @@ def _parse_new_forward(
         voting_url=voting_url,
         company_name=company_name,
         platform_name=platform_name,
-        auto_vote=auto_vote,
+        approve_mode=approve_mode,
+        explain=explain,
     ), usage
 
 

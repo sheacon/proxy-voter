@@ -210,12 +210,26 @@ class TestSendConfirmationEmail:
     @patch("proxy_voter.notifier.resend.Emails.send")
     def test_calls_resend(self, mock_send):
         send_confirmation_email(
-            "user@example.com", "PV-abc123", _make_metadata(), _make_decisions()
+            "admin@example.com", "PV-abc123", _make_metadata(), _make_decisions()
         )
         mock_send.assert_called_once()
         call_args = mock_send.call_args[0][0]
+        assert call_args["to"] == ["admin@example.com"]
         assert "Votes Submitted" in call_args["subject"]
         assert "[PV-abc123]" in call_args["subject"]
+
+    @patch("proxy_voter.notifier.resend.Emails.send")
+    def test_includes_original_sender(self, mock_send):
+        send_confirmation_email(
+            "admin@example.com",
+            "PV-abc123",
+            _make_metadata(),
+            _make_decisions(),
+            original_sender="user@example.com",
+        )
+        html = mock_send.call_args[0][0]["html"]
+        assert "user@example.com" in html
+        assert "Forwarded by" in html
 
 
 class TestSendErrorEmail:
@@ -274,9 +288,20 @@ class TestSendErrorEmail:
     @patch("proxy_voter.notifier.resend.Emails.send")
     def test_subject_with_company_no_session(self, mock_send):
         send_error_email(
-            "user@example.com",
+            "admin@example.com",
             "Error",
             company_name="ACME Corp",
         )
         subject = mock_send.call_args[0][0]["subject"]
         assert "ACME Corp" in subject
+
+    @patch("proxy_voter.notifier.resend.Emails.send")
+    def test_includes_original_sender(self, mock_send):
+        send_error_email(
+            "admin@example.com",
+            "Something went wrong",
+            original_sender="user@example.com",
+        )
+        html = mock_send.call_args[0][0]["html"]
+        assert "user@example.com" in html
+        assert "Original sender" in html

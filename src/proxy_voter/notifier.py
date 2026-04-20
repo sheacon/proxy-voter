@@ -46,6 +46,7 @@ def send_confirmation_email(
     metadata: dict,
     decisions: list[VotingDecision],
     usage: UsageStats | None = None,
+    original_sender: str = "",
 ) -> None:
     _init_resend()
     settings = get_settings()
@@ -53,7 +54,12 @@ def send_confirmation_email(
     company = metadata.get("company_name", "Unknown")
     subject = f"[{session_id}] Votes Submitted: {company}"
     html = _build_results_html(
-        metadata, decisions, submitted=True, session_id=session_id, usage=usage
+        metadata,
+        decisions,
+        submitted=True,
+        session_id=session_id,
+        usage=usage,
+        original_sender=original_sender,
     )
 
     resend.Emails.send(
@@ -77,6 +83,7 @@ def send_error_email(
     stage: str = "",
     voting_url: str = "",
     error_type: str = "",
+    original_sender: str = "",
 ) -> None:
     _init_resend()
     settings = get_settings()
@@ -91,6 +98,10 @@ def send_error_email(
 
     # Build diagnostic details section
     details_rows = ""
+    if original_sender:
+        details_rows += (
+            f"<tr><td><strong>Original sender</strong></td><td>{original_sender}</td></tr>"
+        )
     if session_id:
         details_rows += (
             f"<tr><td><strong>Session</strong></td><td><code>{session_id}</code></td></tr>"
@@ -201,6 +212,7 @@ def _build_results_html(
     submitted: bool,
     session_id: str,
     usage: UsageStats | None = None,
+    original_sender: str = "",
 ) -> str:
     company = metadata.get("company_name", "Unknown")
     meeting_date = metadata.get("meeting_date", "")
@@ -215,18 +227,28 @@ def _build_results_html(
         else '<span class="badge badge-pending">RECOMMENDATIONS (NOT YET SUBMITTED)</span>'
     )
 
+    include_explanations = any(d.reasoning or d.policy_rationale for d in decisions)
+
     rows = ""
     for d in decisions:
         row_class = "aligned" if d.aligned_with_board else "divergent"
         vote_cls = _vote_class(d.vote)
+        explanation_cells = (
+            f"<td>{d.reasoning}</td><td><em>{d.policy_rationale}</em></td>"
+            if include_explanations
+            else ""
+        )
         rows += f"""<tr class="{row_class}">
             <td><strong>{d.proposal_number}</strong></td>
             <td>{d.proposal_description}</td>
             <td class="{vote_cls}">{d.vote}</td>
             <td>{d.board_recommendation}</td>
-            <td>{d.reasoning}</td>
-            <td><em>{d.policy_rationale}</em></td>
+            {explanation_cells}
         </tr>"""
+
+    explanation_headers = (
+        "<th>Reasoning</th><th>Policy Rationale</th>" if include_explanations else ""
+    )
 
     approval_cta = ""
     if not submitted:
@@ -250,6 +272,7 @@ def _build_results_html(
     </div>
     <div class="content">
         <p>{status_badge}</p>
+        {f"<p>Forwarded by: <strong>{original_sender}</strong></p>" if original_sender else ""}
         <p>Session: <code>{session_id}</code> &bull;
            Control #: <code>{control_number}</code> &bull;
            CUSIP: <code>{cusip}</code></p>
@@ -263,8 +286,7 @@ def _build_results_html(
                     <th>Proposal</th>
                     <th>Vote</th>
                     <th>Board Rec</th>
-                    <th>Reasoning</th>
-                    <th>Policy Rationale</th>
+                    {explanation_headers}
                 </tr>
             </thead>
             <tbody>

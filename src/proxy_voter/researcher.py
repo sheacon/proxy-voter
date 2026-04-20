@@ -32,102 +32,120 @@ controversies. Avoid redundant searches.
 - For compensation-related proposals: the shareholder is generally opposed to management-backed \
 compensation proposals. Research whether the compensation is reasonable relative to peers and \
 tied to long-term performance before recommending.
-- For director elections: briefly research each nominee's background and any controversies.
+- For director elections: do not research individual nominees. Apply the shareholder's \
+policy preferences directly based on the ballot information (board recommendation, nominee \
+role/title as shown).
 - For routine matters (financial statement approval, auditor election): generally vote For unless \
 there are specific red flags.
-- For all proposals: prioritize long-term shareholder value above all other considerations.
 - Use exactly the vote options shown on the ballot for each proposal (e.g., some proposals may \
 only offer "For" and "Against", others may include "Abstain" or "Withhold").
-
+{explain_guidance}
 When you have completed your research and analysis, call the `submit_voting_decisions` tool with \
 your recommendations."""
 
-VOTING_DECISIONS_TOOL = {
-    "name": "submit_voting_decisions",
-    "description": "Submit the final voting decisions for all proposals on the ballot.",
-    "input_schema": {
-        "type": "object",
-        "properties": {
-            "company_name": {
-                "type": "string",
-                "description": "The company name as shown on the ballot",
-            },
-            "meeting_date": {
-                "type": "string",
-                "description": "The meeting date as shown on the ballot",
-            },
-            "voting_deadline": {
-                "type": "string",
-                "description": "The voting deadline as shown on the ballot",
-            },
-            "shares_available": {
-                "type": "integer",
-                "description": "Number of shares available to vote",
-            },
-            "control_number": {
-                "type": "string",
-                "description": "The control number shown on the ballot",
-            },
-            "cusip": {
-                "type": "string",
-                "description": "The CUSIP identifier shown on the ballot",
-            },
-            "decisions": {
-                "type": "array",
-                "items": {
-                    "type": "object",
-                    "properties": {
-                        "proposal_number": {
-                            "type": "string",
-                            "description": "Proposal number exactly as shown on ballot",
-                        },
-                        "proposal_description": {
-                            "type": "string",
-                            "description": "Brief description of the proposal",
-                        },
-                        "vote": {
-                            "type": "string",
-                            "description": "Your recommended vote using the exact options "
-                            "available on the ballot (For, Against, Abstain, Withhold, etc.)",
-                        },
-                        "reasoning": {
-                            "type": "string",
-                            "description": "Factual research summary (2-3 sentences)",
-                        },
-                        "policy_rationale": {
-                            "type": "string",
-                            "description": "How this vote adheres to the shareholder's "
-                            "policy preferences",
-                        },
-                        "board_recommendation": {
-                            "type": "string",
-                            "description": "The board/vote recommendation as shown on ballot",
-                        },
-                        "aligned_with_board": {"type": "boolean"},
+EXPLAIN_GUIDANCE_ON = """- Populate `reasoning` (factual research summary) and `policy_rationale` \
+(how the vote adheres to policy) for every decision.
+"""
+
+EXPLAIN_GUIDANCE_OFF = """- Do NOT populate `reasoning` or `policy_rationale` fields — omit them \
+entirely to save output tokens.
+"""
+
+def _build_voting_decisions_tool(explain: bool) -> dict:
+    """Build the submit_voting_decisions tool schema.
+
+    When explain=False, reasoning and policy_rationale are omitted from the schema
+    entirely so the model doesn't generate those (costly) fields.
+    """
+    decision_properties: dict = {
+        "proposal_number": {
+            "type": "string",
+            "description": "Proposal number exactly as shown on ballot",
+        },
+        "proposal_description": {
+            "type": "string",
+            "description": "Brief description of the proposal",
+        },
+        "vote": {
+            "type": "string",
+            "description": "Your recommended vote using the exact options "
+            "available on the ballot (For, Against, Abstain, Withhold, etc.)",
+        },
+        "board_recommendation": {
+            "type": "string",
+            "description": "The board/vote recommendation as shown on ballot",
+        },
+        "aligned_with_board": {"type": "boolean"},
+    }
+    decision_required = [
+        "proposal_number",
+        "proposal_description",
+        "vote",
+        "board_recommendation",
+        "aligned_with_board",
+    ]
+
+    if explain:
+        decision_properties["reasoning"] = {
+            "type": "string",
+            "description": "Factual research summary (2-3 sentences)",
+        }
+        decision_properties["policy_rationale"] = {
+            "type": "string",
+            "description": "How this vote adheres to the shareholder's policy preferences",
+        }
+        decision_required.extend(["reasoning", "policy_rationale"])
+
+    return {
+        "name": "submit_voting_decisions",
+        "description": "Submit the final voting decisions for all proposals on the ballot.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "company_name": {
+                    "type": "string",
+                    "description": "The company name as shown on the ballot",
+                },
+                "meeting_date": {
+                    "type": "string",
+                    "description": "The meeting date as shown on the ballot",
+                },
+                "voting_deadline": {
+                    "type": "string",
+                    "description": "The voting deadline as shown on the ballot",
+                },
+                "shares_available": {
+                    "type": "integer",
+                    "description": "Number of shares available to vote",
+                },
+                "control_number": {
+                    "type": "string",
+                    "description": "The control number shown on the ballot",
+                },
+                "cusip": {
+                    "type": "string",
+                    "description": "The CUSIP identifier shown on the ballot",
+                },
+                "decisions": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": decision_properties,
+                        "required": decision_required,
                     },
-                    "required": [
-                        "proposal_number",
-                        "proposal_description",
-                        "vote",
-                        "reasoning",
-                        "policy_rationale",
-                        "board_recommendation",
-                        "aligned_with_board",
-                    ],
                 },
             },
+            "required": [
+                "company_name",
+                "meeting_date",
+                "voting_deadline",
+                "shares_available",
+                "control_number",
+                "cusip",
+                "decisions",
+            ],
         },
-        "required": [
-            "company_name",
-            "meeting_date",
-            "voting_deadline",
-            "shares_available",
-            "control_number",
-            "cusip",
-            "decisions",
-        ],
-    },
-}
+    }
 
 
 # Patterns to strip from ballot page text (case-insensitive)
@@ -159,11 +177,15 @@ def _clean_ballot_text(text: str) -> str:
 
 async def research_proposals(
     ballot: BallotData,
+    explain: bool = False,
 ) -> tuple[dict, list[VotingDecision], UsageStats]:
     """Research proposals and return (ballot_metadata, decisions, usage_stats).
 
     ballot_metadata contains company_name, meeting_date, voting_deadline, etc.
     extracted by Claude from the raw page text.
+
+    When explain=True, decisions include `reasoning` and `policy_rationale`. When
+    False (default), those fields are omitted to reduce output token cost.
     """
     settings = get_settings()
     policy_preferences = settings.load_policy_preferences()
@@ -193,12 +215,19 @@ async def research_proposals(
 Only include actual voting proposals in your decisions. Skip non-proposal content like \
 requests for printed materials, attendance preferences, etc."""
 
-    logger.info("Sending ballot to research agent (%d chars of page text)", len(cleaned_text))
+    logger.info(
+        "Sending ballot to research agent (%d chars of page text, explain=%s)",
+        len(cleaned_text),
+        explain,
+    )
 
-    system = SYSTEM_PROMPT.format(policy_preferences=policy_preferences)
+    system = SYSTEM_PROMPT.format(
+        policy_preferences=policy_preferences,
+        explain_guidance=EXPLAIN_GUIDANCE_ON if explain else EXPLAIN_GUIDANCE_OFF,
+    )
     tools = [
         {"type": "web_search_20250305", "name": "web_search", "max_uses": 5},
-        VOTING_DECISIONS_TOOL,
+        _build_voting_decisions_tool(explain),
     ]
 
     response = await create_with_retry(
@@ -298,8 +327,8 @@ def _parse_results(tool_input: dict) -> tuple[dict, list[VotingDecision]]:
                 proposal_number=d["proposal_number"],
                 proposal_description=d["proposal_description"],
                 vote=d["vote"],
-                reasoning=d["reasoning"],
-                policy_rationale=d["policy_rationale"],
+                reasoning=d.get("reasoning", ""),
+                policy_rationale=d.get("policy_rationale", ""),
                 board_recommendation=d["board_recommendation"],
                 aligned_with_board=d["aligned_with_board"],
             )

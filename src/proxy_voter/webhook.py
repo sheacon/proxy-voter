@@ -71,6 +71,7 @@ async def _process_email(raw_bytes: bytes) -> None:
     company_name = ""
     session_id = ""
     voting_url = ""
+    settings = get_settings()
     try:
         parsed, parse_usage = await parse_email(raw_bytes)
         logger.info(
@@ -84,9 +85,10 @@ async def _process_email(raw_bytes: bytes) -> None:
         if not validate_sender(parsed.sender_email):
             logger.warning("Rejected email from unapproved sender: %s", parsed.sender_email)
             send_error_email(
-                parsed.sender_email,
-                "Your email address is not authorized to use this service.",
-                "Contact the administrator to add your email to the approved senders list.",
+                settings.admin_email,
+                "An email was received from an unauthorized sender.",
+                "Contact the administrator to add their email to the approved senders list.",
+                original_sender=parsed.sender_email,
             )
             return
 
@@ -102,50 +104,52 @@ async def _process_email(raw_bytes: bytes) -> None:
         company_name = exc.company_name or company_name
         session_id = exc.session_id or session_id
         voting_url = exc.voting_url or voting_url
-        if parsed and parsed.sender_email:
-            try:
-                send_error_email(
-                    parsed.sender_email,
-                    f"An error occurred during {exc.stage}.",
-                    "Please try forwarding the email again. If the problem persists, "
-                    "you may need to vote manually via the voting link in the original email.",
-                    session_id=session_id,
-                    company_name=company_name,
-                    stage=exc.stage,
-                    voting_url=voting_url,
-                    error_type=type(exc.__cause__).__name__ if exc.__cause__ else "",
-                )
-            except Exception:
-                logger.exception("Failed to send error email")
+        try:
+            send_error_email(
+                settings.admin_email,
+                f"An error occurred during {exc.stage}.",
+                "The sender should try forwarding the email again. If the problem persists, "
+                "they may need to vote manually via the voting link in the original email.",
+                session_id=session_id,
+                company_name=company_name,
+                stage=exc.stage,
+                voting_url=voting_url,
+                error_type=type(exc.__cause__).__name__ if exc.__cause__ else "",
+                original_sender=parsed.sender_email if parsed else "",
+            )
+        except Exception:
+            logger.exception("Failed to send error email")
     except Exception as exc:
         logger.exception("Error processing email at stage: %s", stage)
-        if parsed and parsed.sender_email:
-            try:
-                send_error_email(
-                    parsed.sender_email,
-                    "An unexpected error occurred while processing your proxy vote email.",
-                    "Please try forwarding the email again. If the problem persists, "
-                    "you may need to vote manually via the voting link in the original email.",
-                    session_id=session_id,
-                    company_name=company_name,
-                    stage=stage,
-                    voting_url=voting_url,
-                    error_type=type(exc).__name__,
-                )
-            except Exception:
-                logger.exception("Failed to send error email")
+        try:
+            send_error_email(
+                settings.admin_email,
+                "An unexpected error occurred while processing a proxy vote email.",
+                "The sender should try forwarding the email again. If the problem persists, "
+                "they may need to vote manually via the voting link in the original email.",
+                session_id=session_id,
+                company_name=company_name,
+                stage=stage,
+                voting_url=voting_url,
+                error_type=type(exc).__name__,
+                original_sender=parsed.sender_email if parsed else "",
+            )
+        except Exception:
+            logger.exception("Failed to send error email")
 
 
 async def _handle_new_forward(parsed, parse_usage: UsageStats) -> None:
     usage = UsageStats()
     usage.merge(parse_usage)
+    settings = get_settings()
     company_name = parsed.company_name or ""
 
     if not parsed.voting_url:
         send_error_email(
-            parsed.sender_email,
+            settings.admin_email,
             "No voting platform link was found in the forwarded email.",
-            "Make sure you're forwarding a proxy vote notification email from your broker.",
+            "Make sure the sender is forwarding a proxy vote notification email from their broker.",
+            original_sender=parsed.sender_email,
         )
         return
 
@@ -162,17 +166,20 @@ async def _handle_new_forward(parsed, parse_usage: UsageStats) -> None:
     try:
         if not session.ballot.page_text.strip():
             send_error_email(
-                parsed.sender_email,
+                settings.admin_email,
                 "The voting page appears to be empty. The link may have expired.",
                 f"Company: {parsed.company_name or 'Unknown'}",
                 company_name=company_name,
                 voting_url=parsed.voting_url,
+                original_sender=parsed.sender_email,
             )
             return
 
-        logger.info("Researching proposals...")
+        logger.info("Researching proposals (explain=%s)...", parsed.explain)
         try:
-            metadata, decisions, research_usage = await research_proposals(session.ballot)
+            metadata, decisions, research_usage = await research_proposals(
+                session.ballot, explain=parsed.explain
+            )
         except Exception as exc:
             raise _StageError(
                 "proposal research",
@@ -184,9 +191,22 @@ async def _handle_new_forward(parsed, parse_usage: UsageStats) -> None:
 
         logger.info("Research complete: %s — %d decisions", company_name, len(decisions))
 
-        if parsed.auto_vote:
-            logger.info("Auto-vote enabled, casting votes immediately")
-            # Reload the ballot page — the voting session likely expired
+        if parsed.approve_mode:
+            session_id = await create_session(
+                sender_email=parsed.sender_email,
+                company_name=company_name,
+                voting_url=parsed.voting_url,
+                ballot_data=session.ballot,
+                voting_decisions=decisions,
+                metadata=metadata,
+            )
+
+            _log_total_usage(usage)
+            send_recommendations_email(parsed.sender_email, session_id, metadata, decisions, usage)
+            logger.info("Sent recommendations for session %s, awaiting approval", session_id)
+        else:
+            logger.info("Casting votes immediately (default)")
+            # Reload the ballot page -- the voting session likely expired
             # during the research phase (can take several minutes)
             await session.page.goto(parsed.voting_url, wait_until="domcontentloaded", timeout=60000)
             try:
@@ -215,59 +235,58 @@ async def _handle_new_forward(parsed, parse_usage: UsageStats) -> None:
             await update_session_status(session_id, SessionStatus.VOTES_SUBMITTED)
 
             _log_total_usage(usage)
-            send_confirmation_email(parsed.sender_email, session_id, metadata, decisions, usage)
-        else:
-            session_id = await create_session(
-                sender_email=parsed.sender_email,
-                company_name=company_name,
-                voting_url=parsed.voting_url,
-                ballot_data=session.ballot,
-                voting_decisions=decisions,
-                metadata=metadata,
+            send_confirmation_email(
+                settings.admin_email,
+                session_id,
+                metadata,
+                decisions,
+                usage,
+                original_sender=parsed.sender_email,
             )
-
-            _log_total_usage(usage)
-            send_recommendations_email(parsed.sender_email, session_id, metadata, decisions, usage)
-            logger.info("Sent recommendations for session %s, awaiting approval", session_id)
     finally:
         await session.close()
 
 
 async def _handle_approval_reply(parsed) -> None:
     usage = UsageStats()
+    settings = get_settings()
 
     if not parsed.session_id:
         send_error_email(
-            parsed.sender_email,
+            settings.admin_email,
             "Could not identify which voting session to approve.",
-            "Please reply to the original recommendations email.",
+            "The sender should reply to the original recommendations email.",
+            original_sender=parsed.sender_email,
         )
         return
 
     db_session = await get_session(parsed.session_id)
     if not db_session:
         send_error_email(
-            parsed.sender_email,
+            settings.admin_email,
             f"Voting session {parsed.session_id} was not found.",
             "The session may have expired or been deleted.",
             session_id=parsed.session_id,
+            original_sender=parsed.sender_email,
         )
         return
 
     status = SessionStatus(db_session["status"])
     if status == SessionStatus.VOTES_SUBMITTED:
         send_error_email(
-            parsed.sender_email,
+            settings.admin_email,
             f"Votes for session {parsed.session_id} have already been submitted.",
             session_id=parsed.session_id,
+            original_sender=parsed.sender_email,
         )
         return
 
     if status == SessionStatus.EXPIRED:
         send_error_email(
-            parsed.sender_email,
+            settings.admin_email,
             f"Session {parsed.session_id} has expired. The voting deadline may have passed.",
             session_id=parsed.session_id,
+            original_sender=parsed.sender_email,
         )
         return
 
@@ -304,7 +323,14 @@ async def _handle_approval_reply(parsed) -> None:
         await update_session_status(parsed.session_id, SessionStatus.VOTES_SUBMITTED)
 
         _log_total_usage(usage)
-        send_confirmation_email(parsed.sender_email, parsed.session_id, metadata, decisions, usage)
+        send_confirmation_email(
+            settings.admin_email,
+            parsed.session_id,
+            metadata,
+            decisions,
+            usage,
+            original_sender=parsed.sender_email,
+        )
         logger.info("Votes submitted for session %s", parsed.session_id)
     finally:
         await ballot_session.close()
